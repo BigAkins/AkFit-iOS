@@ -16,7 +16,7 @@ enum MacroCalculator {
         let age: Int
         let activityLevel: UserGoal.ActivityLevel
         let goalType: UserGoal.GoalType
-        /// Ignored (treated as `.moderate`) when `goalType == .maintenance`.
+        /// Ignored when `goalType == .maintenance` (adjustment is always 0).
         let pace: UserGoal.Pace
     }
 
@@ -65,7 +65,7 @@ enum MacroCalculator {
         }
     }
 
-    /// Harris-Benedict activity multipliers.
+    /// Standard TDEE activity multipliers (used with Mifflin-St Jeor BMR).
     private static func activityMultiplier(_ level: UserGoal.ActivityLevel) -> Double {
         switch level {
         case .sedentary:  1.2

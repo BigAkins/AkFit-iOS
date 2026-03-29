@@ -114,6 +114,32 @@ struct MacroCalculatorTests {
         #expect(make(.moderate) > make(.fast))
     }
 
+    // MARK: - Maintenance ignores pace (calorie adjustment is always 0)
+
+    @Test func maintenanceIgnoresPace() {
+        func make(_ pace: UserGoal.Pace) -> Int {
+            MacroCalculator.calculate(MacroCalculator.Input(
+                sex: .male, weightKg: 80, heightCm: 175, age: 30,
+                activityLevel: .moderate, goalType: .maintenance, pace: pace
+            )).calories
+        }
+        #expect(make(.slow) == make(.moderate))
+        #expect(make(.moderate) == make(.fast))
+    }
+
+    // MARK: - Lean bulk pace ordering (slow < moderate < fast calories)
+
+    @Test func leanBulkPaceOrdering() {
+        func make(_ pace: UserGoal.Pace) -> Int {
+            MacroCalculator.calculate(MacroCalculator.Input(
+                sex: .male, weightKg: 80, heightCm: 178, age: 28,
+                activityLevel: .moderate, goalType: .leanBulk, pace: pace
+            )).calories
+        }
+        #expect(make(.slow) < make(.moderate))
+        #expect(make(.moderate) < make(.fast))
+    }
+
     // MARK: - Macros sum to calories (within 4 kcal rounding tolerance)
 
     @Test func macrosSumToCalories() {

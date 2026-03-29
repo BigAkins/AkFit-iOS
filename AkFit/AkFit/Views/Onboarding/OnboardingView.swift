@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// Step order:
 ///   1. Sex selection
-///   2. Body stats (birth year · height · weight)
+///   2. Height & weight (birth year · height · weight)
 ///   3. Goal type
 ///   4. Activity level
 ///   5. Pace  (skipped for maintenance)
@@ -21,6 +21,7 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             progressBar
+            navigationHeader
             stepContent
         }
         .background(Color(UIColor.systemBackground))
@@ -42,10 +43,30 @@ struct OnboardingView: View {
     }
 
     private var progressFraction: Double {
-        let totalSteps = visibleSteps.count
-        let currentIndex = visibleSteps.firstIndex(of: step) ?? 0
-        return totalSteps > 1 ? Double(currentIndex + 1) / Double(totalSteps) : 1
+        let steps = visibleSteps
+        let idx   = steps.firstIndex(of: step) ?? 0
+        return steps.count > 1 ? Double(idx + 1) / Double(steps.count) : 1
     }
+
+    // MARK: - Back navigation
+
+    private var navigationHeader: some View {
+        HStack {
+            if step != visibleSteps.first {
+                Button(action: retreat) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 44, height: 44)
+                }
+            }
+            Spacer()
+        }
+        .padding(.leading, 8)
+        .frame(height: 44)
+    }
+
+    // MARK: - Step list (dynamic: pace omitted for maintenance)
 
     private var visibleSteps: [Step] {
         var steps: [Step] = [.sex, .bodyStats, .goal, .activity]
@@ -73,10 +94,18 @@ struct OnboardingView: View {
         guard let idx = steps.firstIndex(of: step), idx + 1 < steps.count else { return }
         step = steps[idx + 1]
     }
+
+    private func retreat() {
+        let steps = visibleSteps
+        guard let idx = steps.firstIndex(of: step), idx > 0 else { return }
+        step = steps[idx - 1]
+    }
 }
 
-// MARK: - Shared layout helpers
+// MARK: - Shared step layout
 
+/// Consistent full-screen layout for each onboarding step:
+/// title/subtitle at top, content filling the middle, CTA pinned to bottom.
 private struct OnboardingStepLayout<Content: View, Footer: View>: View {
     let title: String
     let subtitle: String?
@@ -89,14 +118,15 @@ private struct OnboardingStepLayout<Content: View, Footer: View>: View {
         @ViewBuilder content: @escaping () -> Content,
         @ViewBuilder footer: @escaping () -> Footer
     ) {
-        self.title = title
+        self.title    = title
         self.subtitle = subtitle
-        self.content = content
-        self.footer = footer
+        self.content  = content
+        self.footer   = footer
     }
 
     var body: some View {
         VStack(spacing: 0) {
+            // Header
             VStack(alignment: .leading, spacing: 8) {
                 Text(title)
                     .font(.system(size: 34, weight: .bold))
@@ -109,12 +139,14 @@ private struct OnboardingStepLayout<Content: View, Footer: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
-            .padding(.top, 32)
+            .padding(.top, 16)
             .padding(.bottom, 24)
 
+            // Content — centered vertically in remaining space
             content()
                 .frame(maxHeight: .infinity, alignment: .center)
 
+            // Footer CTA
             footer()
                 .padding(.horizontal, 24)
                 .padding(.bottom, 48)
@@ -122,17 +154,25 @@ private struct OnboardingStepLayout<Content: View, Footer: View>: View {
     }
 }
 
-private func ctaButton(label: String, disabled: Bool = false, action: @escaping () -> Void) -> some View {
-    Button(action: action) {
-        Text(label)
-            .font(.body.weight(.semibold))
-            .frame(maxWidth: .infinity)
-            .frame(height: 52)
-            .background(disabled ? Color(.systemGray4) : Color.primary)
-            .foregroundStyle(Color(UIColor.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+// MARK: - CTA button
+
+private struct CTAButton: View {
+    let label: String
+    var disabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .background(disabled ? Color(.systemGray4) : Color.primary)
+                .foregroundStyle(Color(UIColor.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .disabled(disabled)
     }
-    .disabled(disabled)
 }
 
 // MARK: - Step 1: Sex
@@ -142,7 +182,10 @@ private struct SexStepView: View {
     let onNext: () -> Void
 
     var body: some View {
-        OnboardingStepLayout(title: "What's your\nbiological sex?", subtitle: "Used to calculate your metabolic rate.") {
+        OnboardingStepLayout(
+            title: "What's your\nbiological sex?",
+            subtitle: "Used to calculate your metabolic rate."
+        ) {
             VStack(spacing: 12) {
                 ForEach([UserGoal.Sex.male, .female], id: \.self) { option in
                     SelectionCard(
@@ -153,7 +196,7 @@ private struct SexStepView: View {
             }
             .padding(.horizontal, 24)
         } footer: {
-            ctaButton(label: "Continue", disabled: data.sex == nil) { onNext() }
+            CTAButton(label: "Continue", disabled: data.sex == nil, action: onNext)
         }
     }
 }
@@ -162,57 +205,80 @@ private struct SexStepView: View {
 
 private struct BodyStatsStepView: View {
     @Bindable var data: OnboardingData
-
     let onNext: () -> Void
 
-    private let yearRange: [Int] = Array((Calendar.current.component(.year, from: Date()) - 80)...(Calendar.current.component(.year, from: Date()) - 15))
-    private let heightRange: [Double] = stride(from: 130.0, through: 220.0, by: 0.5).map { $0 }
-    private let weightRange: [Double] = stride(from: 30.0, through: 200.0, by: 0.5).map { $0 }
+    // Ranges computed once at struct init — values are stable for the app session.
+    private static let thisYear    = Calendar.current.component(.year, from: Date())
+    private static let yearRange   = Array(stride(from: thisYear - 80, through: thisYear - 15, by: 1))
+    private static let heightRange = Array(stride(from: 130.0, through: 220.0, by: 1.0))
+    private static let weightRange = Array(stride(from: 30.0, through: 200.0, by: 1.0))
 
     var body: some View {
-        OnboardingStepLayout(title: "Body stats", subtitle: "All data stays on your device until you save.") {
+        OnboardingStepLayout(
+            title: "Height & weight",
+            subtitle: "Used to calculate your calorie and macro targets."
+        ) {
             VStack(spacing: 0) {
-                statRow(label: "Birth year") {
+                // Birth year — compact row
+                HStack {
+                    Text("Born in")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
                     Picker("Birth year", selection: $data.birthYear) {
-                        ForEach(yearRange.reversed(), id: \.self) { Text(String($0)).tag($0) }
+                        ForEach(Self.yearRange.reversed(), id: \.self) {
+                            Text(String($0)).tag($0)
+                        }
                     }
                     .pickerStyle(.wheel)
-                    .frame(height: 120)
+                    .frame(width: 110, height: 96)
                     .clipped()
                 }
+                .padding(.horizontal, 24)
+
                 Divider().padding(.horizontal, 24)
-                statRow(label: "Height") {
-                    Picker("Height (cm)", selection: $data.heightCm) {
-                        ForEach(heightRange, id: \.self) { Text(String(format: "%.1f cm", $0)).tag($0) }
+
+                // Height + weight — two columns matching the primary reference
+                HStack(spacing: 0) {
+                    VStack(spacing: 4) {
+                        Text("Height")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("Height", selection: $data.heightCm) {
+                            ForEach(Self.heightRange, id: \.self) {
+                                Text("\(Int($0)) cm").tag($0)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(height: 144)
+                        .clipped()
                     }
-                    .pickerStyle(.wheel)
-                    .frame(height: 120)
-                    .clipped()
-                }
-                Divider().padding(.horizontal, 24)
-                statRow(label: "Weight") {
-                    Picker("Weight (kg)", selection: $data.weightKg) {
-                        ForEach(weightRange, id: \.self) { Text(String(format: "%.1f kg", $0)).tag($0) }
+                    .frame(maxWidth: .infinity)
+
+                    Rectangle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: 0.5)
+                        .padding(.vertical, 16)
+
+                    VStack(spacing: 4) {
+                        Text("Weight")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("Weight", selection: $data.weightKg) {
+                            ForEach(Self.weightRange, id: \.self) {
+                                Text("\(Int($0)) kg").tag($0)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(height: 144)
+                        .clipped()
                     }
-                    .pickerStyle(.wheel)
-                    .frame(height: 120)
-                    .clipped()
+                    .frame(maxWidth: .infinity)
                 }
+                .padding(.horizontal, 24)
             }
         } footer: {
-            ctaButton(label: "Continue") { onNext() }
-        }
-    }
-
-    @ViewBuilder
-    private func statRow<P: View>(label: String, @ViewBuilder picker: @escaping () -> P) -> some View {
-        HStack {
-            Text(label)
-                .font(.body.weight(.medium))
-                .frame(width: 90, alignment: .leading)
-                .padding(.leading, 24)
-            picker()
-                .frame(maxWidth: .infinity)
+            CTAButton(label: "Continue", action: onNext)
         }
     }
 }
@@ -224,7 +290,7 @@ private struct GoalStepView: View {
     let onNext: () -> Void
 
     var body: some View {
-        OnboardingStepLayout(title: "What's your\nprimary goal?") {
+        OnboardingStepLayout(title: "What is your goal?") {
             VStack(spacing: 12) {
                 ForEach(UserGoal.GoalType.allCases, id: \.self) { option in
                     SelectionCard(
@@ -233,20 +299,22 @@ private struct GoalStepView: View {
                         isSelected: data.goalType == option
                     ) {
                         data.goalType = option
+                        // Reset pace to moderate when switching to maintenance
+                        // so OnboardingData stays consistent.
                         if option == .maintenance { data.pace = .moderate }
                     }
                 }
             }
             .padding(.horizontal, 24)
         } footer: {
-            ctaButton(label: "Continue", disabled: data.goalType == nil) { onNext() }
+            CTAButton(label: "Continue", disabled: data.goalType == nil, action: onNext)
         }
     }
 
     private func goalSubtitle(_ goal: UserGoal.GoalType) -> String {
         switch goal {
         case .fatLoss:     "Reduce body fat while preserving muscle"
-        case .maintenance: "Maintain current weight and body composition"
+        case .maintenance: "Maintain current weight and composition"
         case .leanBulk:    "Build muscle with minimal fat gain"
         }
     }
@@ -258,13 +326,14 @@ private struct ActivityStepView: View {
     @Bindable var data: OnboardingData
     let onNext: () -> Void
 
+    private let levels: [UserGoal.ActivityLevel] = [
+        .sedentary, .light, .moderate, .active, .veryActive
+    ]
+
     var body: some View {
         OnboardingStepLayout(title: "How active are\nyou day-to-day?") {
             VStack(spacing: 12) {
-                ForEach([
-                    UserGoal.ActivityLevel.sedentary,
-                    .light, .moderate, .active, .veryActive
-                ], id: \.self) { option in
+                ForEach(levels, id: \.self) { option in
                     SelectionCard(
                         title: option.displayName,
                         subtitle: activitySubtitle(option),
@@ -274,7 +343,7 @@ private struct ActivityStepView: View {
             }
             .padding(.horizontal, 24)
         } footer: {
-            ctaButton(label: "Continue", disabled: data.activityLevel == nil) { onNext() }
+            CTAButton(label: "Continue", disabled: data.activityLevel == nil, action: onNext)
         }
     }
 
@@ -295,12 +364,14 @@ private struct PaceStepView: View {
     @Bindable var data: OnboardingData
     let onNext: () -> Void
 
-    private var paceTitle: String {
-        data.goalType == .leanBulk ? "How fast do you\nwant to bulk?" : "How fast do you\nwant to lose fat?"
+    private var title: String {
+        data.goalType == .leanBulk
+            ? "How fast do you\nwant to bulk?"
+            : "How fast do you\nwant to lose fat?"
     }
 
     var body: some View {
-        OnboardingStepLayout(title: paceTitle) {
+        OnboardingStepLayout(title: title) {
             VStack(spacing: 12) {
                 ForEach([UserGoal.Pace.slow, .moderate, .fast], id: \.self) { option in
                     SelectionCard(
@@ -312,20 +383,20 @@ private struct PaceStepView: View {
             }
             .padding(.horizontal, 24)
         } footer: {
-            ctaButton(label: "Continue") { onNext() }
+            CTAButton(label: "Continue", action: onNext)
         }
     }
 
     private func paceSubtitle(_ pace: UserGoal.Pace) -> String {
         guard let goalType = data.goalType else { return "" }
         switch (goalType, pace) {
-        case (.fatLoss, .slow):     return "−250 kcal/day · easier to sustain"
-        case (.fatLoss, .moderate): return "−500 kcal/day · proven sweet spot"
-        case (.fatLoss, .fast):     return "−750 kcal/day · aggressive, monitor energy"
-        case (.leanBulk, .slow):    return "+150 kcal/day · minimal fat gain"
+        case (.fatLoss, .slow):      return "−250 kcal/day · easier to sustain"
+        case (.fatLoss, .moderate):  return "−500 kcal/day · proven sweet spot"
+        case (.fatLoss, .fast):      return "−750 kcal/day · aggressive, monitor energy"
+        case (.leanBulk, .slow):     return "+150 kcal/day · minimal fat gain"
         case (.leanBulk, .moderate): return "+300 kcal/day · steady gains"
-        case (.leanBulk, .fast):    return "+500 kcal/day · maximize muscle growth"
-        default:                    return ""
+        case (.leanBulk, .fast):     return "+500 kcal/day · maximize muscle growth"
+        default:                     return ""
         }
     }
 }
@@ -343,15 +414,38 @@ private struct ResultsStepView: View {
         data.calculatorInput.map { MacroCalculator.calculate($0) }
     }
 
+    /// Short context label shown below the title, e.g. "Fat Loss · Moderate"
+    private var contextLabel: String? {
+        guard let input = data.calculatorInput else { return nil }
+        if input.goalType == .maintenance { return input.goalType.displayName }
+        return "\(input.goalType.displayName) · \(input.pace.displayName)"
+    }
+
     var body: some View {
         OnboardingStepLayout(
-            title: "Your daily\ntargets.",
-            subtitle: "Based on your stats and goal. You can adjust these later."
+            title: "Your daily\ntargets",
+            subtitle: contextLabel
         ) {
             if let out = output {
-                VStack(spacing: 16) {
-                    MacroResultRow(label: "Calories", value: "\(out.calories)", unit: "kcal", isPrimary: true)
-                    Divider().padding(.horizontal, 24)
+                VStack(spacing: 0) {
+                    // Calorie number — primary stat
+                    VStack(spacing: 4) {
+                        HStack(alignment: .lastTextBaseline, spacing: 6) {
+                            Text("\(out.calories)")
+                                .font(.system(size: 64, weight: .bold))
+                                .foregroundStyle(.primary)
+                            Text("kcal")
+                                .font(.title3)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("daily calories")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 32)
+
+                    // Macro chips
                     HStack(spacing: 12) {
                         MacroChip(label: "Protein", value: "\(out.proteinG)g")
                         MacroChip(label: "Carbs",   value: "\(out.carbsG)g")
@@ -367,18 +461,20 @@ private struct ResultsStepView: View {
                     .foregroundStyle(.red)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 24)
-                    .padding(.top, 8)
+                    .padding(.top, 12)
             }
         } footer: {
-            ctaButton(label: isSaving ? "Saving…" : "Start tracking", disabled: isSaving || output == nil) {
-                save()
-            }
+            CTAButton(
+                label: isSaving ? "Saving…" : "Start tracking",
+                disabled: isSaving || output == nil,
+                action: save
+            )
         }
     }
 
     private func save() {
         guard
-            let out = output,
+            let out   = output,
             let input = data.calculatorInput,
             let userId = authManager.session?.user.id
         else { return }
@@ -389,13 +485,8 @@ private struct ResultsStepView: View {
         Task {
             defer { isSaving = false }
             do {
-                // Upsert profile (display_name left nil; can be added later).
                 let profile = try await upsertProfile(userId: userId)
-
-                // Insert active goal row.
-                let goal = try await insertGoal(userId: userId, input: input, out: out)
-
-                // Route to MainTabView — no extra network fetch needed.
+                let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
                 errorMessage = error.localizedDescription
@@ -404,9 +495,7 @@ private struct ResultsStepView: View {
     }
 
     private func upsertProfile(userId: UUID) async throws -> UserProfile {
-        struct ProfileInsert: Encodable {
-            let id: UUID
-        }
+        struct ProfileInsert: Encodable { let id: UUID }
         return try await SupabaseClientProvider.shared
             .from("profiles")
             .upsert(ProfileInsert(id: userId), onConflict: "id")
@@ -416,7 +505,11 @@ private struct ResultsStepView: View {
             .value
     }
 
-    private func insertGoal(userId: UUID, input: MacroCalculator.Input, out: MacroCalculator.Output) async throws -> UserGoal {
+    private func insertGoal(
+        userId: UUID,
+        input: MacroCalculator.Input,
+        out: MacroCalculator.Output
+    ) async throws -> UserGoal {
         struct GoalInsert: Encodable {
             let user_id: UUID
             let goal_type: String
@@ -424,8 +517,8 @@ private struct ResultsStepView: View {
             let target_protein_g: Int
             let target_carbs_g: Int
             let target_fat_g: Int
-            let height_cm: Double
-            let weight_kg: Double
+            let height_cm: Int
+            let weight_kg: Int
             let age: Int
             let sex: String
             let activity_level: String
@@ -439,8 +532,9 @@ private struct ResultsStepView: View {
             target_protein_g: out.proteinG,
             target_carbs_g:   out.carbsG,
             target_fat_g:     out.fatG,
-            height_cm:        input.heightCm,
-            weight_kg:        input.weightKg,
+            // Rounded to nearest integer — picker uses 1-unit steps.
+            height_cm:        Int(input.heightCm.rounded()),
+            weight_kg:        Int(input.weightKg.rounded()),
             age:              input.age,
             sex:              input.sex.rawValue,
             activity_level:   input.activityLevel.rawValue,
@@ -457,8 +551,12 @@ private struct ResultsStepView: View {
     }
 }
 
-// MARK: - Reusable sub-views
+// MARK: - SelectionCard
 
+/// A tappable card used for single-choice selections throughout onboarding.
+///
+/// Selected state: dark filled background + white text (matches primary reference).
+/// Non-selected state: light gray background + primary text.
 private struct SelectionCard: View {
     let title: String
     var subtitle: String? = nil
@@ -467,61 +565,35 @@ private struct SelectionCard: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 12) {
+            HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(isSelected ? Color(UIColor.systemBackground) : .primary)
                     if let subtitle {
                         Text(subtitle)
                             .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(
+                                isSelected
+                                    ? Color(UIColor.systemBackground).opacity(0.72)
+                                    : .secondary
+                            )
                     }
                 }
                 Spacer()
-                if isSelected {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.primary)
-                        .font(.title3)
-                }
             }
             .padding(.horizontal, 16)
-            .padding(.vertical, 14)
+            .padding(.vertical, 16)
             .background(
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(isSelected ? Color(.systemGray6) : Color(.systemGray6).opacity(0.5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(isSelected ? Color.primary : Color.clear, lineWidth: 1.5)
-                    )
+                    .fill(isSelected ? Color.primary : Color(.systemGray6))
             )
         }
         .buttonStyle(.plain)
     }
 }
 
-private struct MacroResultRow: View {
-    let label: String
-    let value: String
-    let unit: String
-    var isPrimary: Bool = false
-
-    var body: some View {
-        HStack(alignment: .lastTextBaseline) {
-            Text(label)
-                .font(isPrimary ? .title3.weight(.semibold) : .body)
-                .foregroundStyle(.primary)
-            Spacer()
-            Text(value)
-                .font(isPrimary ? .system(size: 44, weight: .bold) : .title2.weight(.bold))
-                .foregroundStyle(.primary)
-            Text(unit)
-                .font(.body)
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal, 24)
-    }
-}
+// MARK: - MacroChip
 
 private struct MacroChip: View {
     let label: String
