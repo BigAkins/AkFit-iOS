@@ -3,11 +3,13 @@ import SwiftUI
 @main
 struct AkFitApp: App {
     @State private var authManager = AuthManager()
+    @State private var logStore    = FoodLogStore()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(authManager)
+                .environment(logStore)
         }
     }
 }

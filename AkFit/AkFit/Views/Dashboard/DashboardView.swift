@@ -2,17 +2,32 @@ import SwiftUI
 
 /// Main dashboard — the first screen the user sees after onboarding.
 ///
-/// Data is sourced entirely from `AuthManager.goal` (already in memory).
-/// No network fetch is triggered here. When food logging is added, populate
-/// `DaySummary.consumed*` fields from today's log entries and this view
-/// will reflect the correct remaining values automatically.
+/// **Data sources:**
+/// - Targets come from `AuthManager.goal` (already in memory, no fetch).
+/// - Consumed values are computed from `FoodLogStore.todayLogs`.
+/// - `FoodLogStore.refreshToday` is called once on first appear via `.task`.
+///
+/// When `FoodLogStore.insert` succeeds (triggered from `FoodDetailView`), it
+/// appends the new row to `todayLogs` in memory. Observation propagates the
+/// change here — no manual refresh or refetch needed after logging.
 struct DashboardView: View {
-    @Environment(AuthManager.self) private var authManager
+    @Environment(AuthManager.self)  private var authManager
+    @Environment(FoodLogStore.self) private var logStore
+
     @State private var showAddSheet = false
 
-    /// Derived synchronously from the in-memory goal — no async work.
+    /// Targets from the active goal + consumed totals from today's log entries.
+    /// Computed synchronously — no async work in the view.
     private var summary: DaySummary? {
-        authManager.goal.map { DaySummary.from(goal: $0) }
+        guard let goal = authManager.goal else { return nil }
+        var s = DaySummary.from(goal: goal)
+        for log in logStore.todayLogs {
+            s.consumedCalories += log.calories
+            s.consumedProteinG += Int(log.proteinG.rounded())
+            s.consumedCarbsG   += Int(log.carbsG.rounded())
+            s.consumedFatG     += Int(log.fatG.rounded())
+        }
+        return s
     }
 
     var body: some View {
@@ -23,7 +38,7 @@ struct DashboardView: View {
                         VStack(spacing: 16) {
                             CalorieSummaryCard(summary: summary)
                             MacroRow(summary: summary)
-                            FoodLogSection()
+                            FoodLogSection(logs: logStore.todayLogs)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
@@ -31,9 +46,16 @@ struct DashboardView: View {
                     }
                 }
                 .navigationTitle("Today")
+                .task {
+                    // Fetch today's logs once on first appear.
+                    // After logging, FoodLogStore appends in memory so no re-fetch needed.
+                    if let userId = authManager.currentUserId {
+                        await logStore.refreshToday(userId: userId)
+                    }
+                }
             }
 
-            // Floating add button — entry point for food logging
+            // Floating add button — opens search / logging sheet
             Button {
                 showAddSheet = true
             } label: {
@@ -66,6 +88,8 @@ private struct CalorieSummaryCard: View {
                     .font(.system(size: 52, weight: .bold))
                     .monospacedDigit()
                     .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: summary.remainingCalories)
 
                 Text("Calories remaining")
                     .font(.subheadline)
@@ -138,6 +162,8 @@ private struct MacroCard: View {
                 .font(.title3.weight(.bold))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: remaining)
 
             Text(name)
                 .font(.footnote.weight(.medium))
@@ -147,7 +173,6 @@ private struct MacroCard: View {
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
 
-            // Mini progress ring — centered below the text
             ProgressRing(progress: progress, color: color, size: 36, lineWidth: 4)
                 .frame(maxWidth: .infinity, alignment: .center)
                 .padding(.top, 6)
@@ -162,31 +187,101 @@ private struct MacroCard: View {
 // MARK: - Food log section
 
 private struct FoodLogSection: View {
+    let logs: [FoodLog]
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Today's food")
                 .font(.headline)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // Empty state — replaced by actual log entries when logging is built.
-            VStack(spacing: 10) {
-                Image(systemName: "fork.knife")
-                    .font(.system(size: 28))
-                    .foregroundStyle(Color(.systemGray3))
-
-                Text("Nothing logged yet")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-
-                Text("Tap + to log your first meal")
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
+            if logs.isEmpty {
+                emptyState
+            } else {
+                logList
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 40)
-            .background(Color(.systemGray6))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "fork.knife")
+                .font(.system(size: 28))
+                .foregroundStyle(Color(.systemGray3))
+
+            Text("Nothing logged yet")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Text("Tap + to log your first meal")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var logList: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
+                FoodLogRow(log: log)
+                if index < logs.count - 1 {
+                    Divider()
+                        .padding(.leading, 16)
+                }
+            }
+        }
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Food log row
+
+private struct FoodLogRow: View {
+    let log: FoodLog
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(log.foodName)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(servingText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            HStack(alignment: .lastTextBaseline, spacing: 2) {
+                Text("\(log.calories)")
+                    .font(.body.weight(.bold))
+                    .monospacedDigit()
+                Text("kcal")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 11)
+        .padding(.horizontal, 16)
+    }
+
+    private var servingText: String {
+        let qty = log.quantity
+        let qtyStr: String
+        if qty == qty.rounded() {
+            qtyStr = "\(Int(qty))"
+        } else {
+            var s = String(format: "%.2f", qty)
+            while s.contains(".") && (s.hasSuffix("0") || s.hasSuffix(".")) { s.removeLast() }
+            qtyStr = s
+        }
+        return "\(qtyStr) × \(log.servingLabel)"
     }
 }
 
@@ -197,7 +292,7 @@ private struct FoodLogSection: View {
 private struct ProgressRing: View {
     let progress: Double  // 0.0 – 1.0
     let color: Color
-    var size: CGFloat   = 80
+    var size: CGFloat     = 80
     var lineWidth: CGFloat = 8
 
     var body: some View {
@@ -216,7 +311,7 @@ private struct ProgressRing: View {
 
 // MARK: - Add food placeholder sheet
 
-/// Placeholder presented by the FAB until food search / logging is implemented.
+/// Placeholder presented by the FAB until FAB → search navigation is wired.
 private struct AddFoodPlaceholder: View {
     var body: some View {
         VStack(spacing: 0) {
@@ -231,10 +326,10 @@ private struct AddFoodPlaceholder: View {
                 .foregroundStyle(Color(.systemGray3))
                 .padding(.bottom, 12)
 
-            Text("Food search coming soon")
+            Text("Use the Search tab to log food")
                 .font(.headline)
 
-            Text("This will open food search and logging.")
+            Text("Tap Search at the bottom, find a food,\nthen tap \"Log food\" to add it here.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -247,31 +342,60 @@ private struct AddFoodPlaceholder: View {
     }
 }
 
+// MARK: - Preview helpers
+
+private extension DashboardView {
+    /// Builds a preview-ready `AuthManager` with a fat-loss goal set.
+    static func previewAuth() -> AuthManager {
+        let auth = AuthManager(previewMode: true)
+        auth.markOnboarded(
+            goal: UserGoal(
+                id: UUID(), userId: UUID(),
+                goalType: .fatLoss,
+                targetCalories: 2100, targetProteinG: 165,
+                targetCarbsG: 220,   targetFatG: 65,
+                heightCm: nil, weightKg: nil, age: nil, sex: nil,
+                activityLevel: nil, pace: nil,
+                isActive: true, createdAt: Date(), updatedAt: Date()
+            ),
+            profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+        )
+        return auth
+    }
+
+    /// Two realistic food log entries for the populated preview state.
+    /// Consumed: 402 kcal · P 52g · C 26g · F 8g
+    static var previewLogs: [FoodLog] {
+        let uid = UUID()
+        return [
+            FoodLog(
+                id: UUID(), userId: uid,
+                foodName: "Chicken Breast, cooked", servingLabel: "100g",
+                quantity: 1.5,
+                calories: 248, proteinG: 46.5, carbsG: 0,  fatG: 5.4,
+                loggedAt: Date(), createdAt: Date()
+            ),
+            FoodLog(
+                id: UUID(), userId: uid,
+                foodName: "Oats, rolled", servingLabel: "40g (½ cup)",
+                quantity: 1.0,
+                calories: 154, proteinG: 5.4,  carbsG: 26, fatG: 2.8,
+                loggedAt: Date(), createdAt: Date()
+            ),
+        ]
+    }
+}
+
 // MARK: - Preview
 
-#Preview {
-    let auth = AuthManager(previewMode: true)
-    auth.markOnboarded(
-        goal: UserGoal(
-            id: UUID(),
-            userId: UUID(),
-            goalType: .fatLoss,
-            targetCalories: 2100,
-            targetProteinG: 165,
-            targetCarbsG: 220,
-            targetFatG: 65,
-            heightCm: nil,
-            weightKg: nil,
-            age: nil,
-            sex: nil,
-            activityLevel: nil,
-            pace: nil,
-            isActive: true,
-            createdAt: Date(),
-            updatedAt: Date()
-        ),
-        profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
-    )
-    return DashboardView()
-        .environment(auth)
+#Preview("Populated") {
+    DashboardView()
+        .environment(DashboardView.previewAuth())
+        .environment(FoodLogStore(previewLogs: DashboardView.previewLogs))
+}
+
+#Preview("Empty state") {
+    DashboardView()
+        .environment(DashboardView.previewAuth())
+        .environment(FoodLogStore())
 }

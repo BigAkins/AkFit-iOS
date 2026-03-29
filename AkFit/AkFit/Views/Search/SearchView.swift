@@ -198,5 +198,9 @@ private struct MacroLine: View {
 // MARK: - Preview
 
 #Preview {
+    // FoodLogStore and AuthManager are required by FoodDetailView,
+    // which is pushed onto the NavigationStack when a result row is tapped.
     SearchView()
+        .environment(FoodLogStore())
+        .environment(AuthManager(previewMode: true))
 }

@@ -46,6 +46,11 @@ final class AuthManager {
     /// so views don't need to import Supabase's Auth module.
     var currentUserEmail: String? { session?.user.email }
 
+    /// The authenticated user's UUID. `nil` when signed out.
+    /// Use this instead of accessing `session.user.id` directly in views,
+    /// so views don't need to import Supabase's Auth module.
+    var currentUserId: UUID? { session?.user.id }
+
     // MARK: - Init
 
     init() {

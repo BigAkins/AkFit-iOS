@@ -5,18 +5,19 @@ import SwiftUI
 /// **Data flow:** `FoodItem` arrives by value from `SearchView`. All macro values
 /// are scaled by `quantity` entirely within this view — the model is never mutated.
 ///
-/// **Logging hook:** `onLog` is called with the food and chosen quantity when the
-/// user taps "Log food". No persistence happens here; pass a real handler from the
-/// call site (next milestone) to insert a `food_logs` row. Leave `nil` for previews
-/// or before logging is wired up.
+/// **Logging:** tapping "Log food" calls `FoodLogStore.insert` (environment) which
+/// persists to Supabase and appends to `todayLogs` in memory. `DashboardView`
+/// re-renders automatically via Observation — no manual refresh needed.
 struct FoodDetailView: View {
     let food: FoodItem
-    /// Called on "Log food" tap. `quantity` is a multiplier of the base
-    /// `servingSize`, e.g. 1.5 = 1.5 servings. After calling, the view dismisses.
-    var onLog: ((FoodItem, Double) -> Void)? = nil
 
-    @State private var quantity: Double = 1.0
-    @Environment(\.dismiss) private var dismiss
+    @State private var quantity:  Double  = 1.0
+    @State private var isLogging: Bool    = false
+    @State private var logError:  String? = nil
+
+    @Environment(FoodLogStore.self) private var logStore
+    @Environment(AuthManager.self)  private var authManager
+    @Environment(\.dismiss)         private var dismiss
 
     // MARK: - Scaled nutrition values
 
@@ -54,7 +55,6 @@ struct FoodDetailView: View {
 
     private var calorieMacroCard: some View {
         VStack(spacing: 16) {
-            // Hero calorie number
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(scaledCalories)")
                     .font(.system(size: 52, weight: .bold))
@@ -70,7 +70,6 @@ struct FoodDetailView: View {
 
             Divider()
 
-            // Macro columns
             HStack(spacing: 0) {
                 macroColumn(label: "Protein", value: scaledProteinG, color: .red)
                 Divider().frame(height: 36)
@@ -124,8 +123,6 @@ struct FoodDetailView: View {
         }
     }
 
-    /// Short label describing the current selection.
-    /// "1 serving" at default; "2 servings · 200g total" when adjusted.
     private var servingSummary: String {
         if quantity == 1.0 { return "1 serving" }
         let totalG = Int((food.servingWeightG * quantity).rounded())
@@ -135,20 +132,47 @@ struct FoodDetailView: View {
     // MARK: - Log button
 
     private var logButton: some View {
-        Button {
-            onLog?(food, quantity)
-            dismiss()
-        } label: {
-            Text("Log food")
+        VStack(spacing: 6) {
+            if let error = logError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 16)
+            }
+
+            Button {
+                guard let userId = authManager.currentUserId else { return }
+                isLogging = true
+                logError  = nil
+                Task {
+                    defer { isLogging = false }
+                    do {
+                        try await logStore.insert(food: food, quantity: quantity, for: userId)
+                        dismiss()
+                    } catch {
+                        logError = "Couldn't save. Please try again."
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    if isLogging {
+                        ProgressView()
+                            .tint(Color(UIColor.systemBackground))
+                    }
+                    Text(isLogging ? "Logging..." : "Log food")
+                }
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .frame(height: 52)
                 .background(Color.primary)
                 .foregroundStyle(Color(UIColor.systemBackground))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+            }
+            .disabled(isLogging)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 12)
         }
-        .padding(.horizontal, 16)
-        .padding(.bottom, 12)
         .background(
             Color(UIColor.systemBackground)
                 .shadow(color: .black.opacity(0.06), radius: 6, x: 0, y: -2)
@@ -225,7 +249,6 @@ private func formatQuantity(_ n: Double) -> String {
 }
 
 private extension Double {
-    /// Rounds to the nearest multiple of `step`.
     func roundedToNearest(_ step: Double) -> Double {
         (self / step).rounded() * step
     }
@@ -247,6 +270,8 @@ private extension Double {
             fatG: 3.6
         ))
     }
+    .environment(FoodLogStore())
+    .environment(AuthManager(previewMode: true))
 }
 
 #Preview("High fat food") {
@@ -263,4 +288,6 @@ private extension Double {
             fatG: 16
         ))
     }
+    .environment(FoodLogStore())
+    .environment(AuthManager(previewMode: true))
 }
