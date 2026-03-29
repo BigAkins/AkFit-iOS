@@ -1,9 +1,4 @@
-SUPABASE_URL = https://cofakxwmrxauqtdldilx.supabase.co
-SUPABASE_ANON_KEY = sb_publishable_RH4vlCveisJz_98XDKA9AA_zU8S4saU
-//
-//  Debug.xcconfig
-//  AkFit
-//
-//  Created by Akinola Ogunbiyi on 3/29/26.
-//
-
+// Debug build configuration
+// Values are loaded from Secrets.xcconfig, which is gitignored.
+// Copy Config/Secrets.xcconfig.template → Config/Secrets.xcconfig and fill in your values.
+#include? "Secrets.xcconfig"
