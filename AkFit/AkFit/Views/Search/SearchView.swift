@@ -96,10 +96,8 @@ struct SearchView: View {
 
     @ViewBuilder
     private func foodLink(_ food: FoodItem) -> some View {
-        // NavigationLink is the routing hook for food detail.
-        // Replace `FoodDetailPlaceholder` with the real detail view next milestone.
         NavigationLink {
-            FoodDetailPlaceholder(food: food)
+            FoodDetailView(food: food)
         } label: {
             FoodRow(food: food)
         }
@@ -194,38 +192,6 @@ private struct MacroLine: View {
             return "\(Int(value.rounded()))g"
         }
         return String(format: "%.1fg", value)
-    }
-}
-
-// MARK: - Food detail placeholder
-
-/// Temporary destination for food detail navigation.
-/// Replace with the real portion-selection + logging view in the next milestone.
-private struct FoodDetailPlaceholder: View {
-    let food: FoodItem
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Image(systemName: "fork.knife.circle")
-                .font(.system(size: 52))
-                .foregroundStyle(Color(.systemGray3))
-            Text(food.name)
-                .font(.title3.weight(.semibold))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 24)
-            Text("\(food.calories) kcal · \(food.servingSize)")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Text("Portion selection and logging\ncoming in the next milestone.")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .padding(.top, 4)
-            Spacer()
-        }
-        .navigationTitle("Food Detail")
-        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
