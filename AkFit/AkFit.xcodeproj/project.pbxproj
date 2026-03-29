@@ -6,6 +6,15 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		61A1917A2F7930450061850D /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191792F7930450061850D /* Auth */; };
+		61A1917C2F7930450061850D /* Functions in Frameworks */ = {isa = PBXBuildFile; productRef = 61A1917B2F7930450061850D /* Functions */; };
+		61A1917E2F7930450061850D /* PostgREST in Frameworks */ = {isa = PBXBuildFile; productRef = 61A1917D2F7930450061850D /* PostgREST */; };
+		61A191802F7930450061850D /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 61A1917F2F7930450061850D /* Realtime */; };
+		61A191822F7930450061850D /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191812F7930450061850D /* Storage */; };
+		61A191842F7930450061850D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191832F7930450061850D /* Supabase */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		61A1913D2F7921AF0061850D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -29,9 +38,22 @@
 		61A191462F7921AF0061850D /* AkFitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AkFitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		61A1916F2F792D0A0061850D /* Exceptions for "AkFit" folder in "AkFit" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 61A1912E2F7921AE0061850D /* AkFit */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		61A191312F7921AE0061850D /* AkFit */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				61A1916F2F792D0A0061850D /* Exceptions for "AkFit" folder in "AkFit" target */,
+			);
 			path = AkFit;
 			sourceTree = "<group>";
 		};
@@ -45,6 +67,16 @@
 			path = AkFitUITests;
 			sourceTree = "<group>";
 		};
+		61A191672F792A1E0061850D /* Config */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Config;
+			sourceTree = "<group>";
+		};
+		61A191732F792D8A0061850D /* Services */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Services;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -52,6 +84,12 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				61A1917E2F7930450061850D /* PostgREST in Frameworks */,
+				61A1917C2F7930450061850D /* Functions in Frameworks */,
+				61A191842F7930450061850D /* Supabase in Frameworks */,
+				61A1917A2F7930450061850D /* Auth in Frameworks */,
+				61A191822F7930450061850D /* Storage in Frameworks */,
+				61A191802F7930450061850D /* Realtime in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -75,9 +113,12 @@
 		61A191262F7921AE0061850D = {
 			isa = PBXGroup;
 			children = (
+				61A191732F792D8A0061850D /* Services */,
+				61A191672F792A1E0061850D /* Config */,
 				61A191312F7921AE0061850D /* AkFit */,
 				61A1913F2F7921AF0061850D /* AkFitTests */,
 				61A191492F7921AF0061850D /* AkFitUITests */,
+				61A191782F7930450061850D /* Frameworks */,
 				61A191302F7921AE0061850D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +131,13 @@
 				61A191462F7921AF0061850D /* AkFitUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		61A191782F7930450061850D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -109,9 +157,17 @@
 			);
 			fileSystemSynchronizedGroups = (
 				61A191312F7921AE0061850D /* AkFit */,
+				61A191672F792A1E0061850D /* Config */,
+				61A191732F792D8A0061850D /* Services */,
 			);
 			name = AkFit;
 			packageProductDependencies = (
+				61A191792F7930450061850D /* Auth */,
+				61A1917B2F7930450061850D /* Functions */,
+				61A1917D2F7930450061850D /* PostgREST */,
+				61A1917F2F7930450061850D /* Realtime */,
+				61A191812F7930450061850D /* Storage */,
+				61A191832F7930450061850D /* Supabase */,
 			);
 			productName = AkFit;
 			productReference = 61A1912F2F7921AE0061850D /* AkFit.app */;
@@ -274,6 +330,8 @@
 /* Begin XCBuildConfiguration section */
 		61A1914E2F7921AF0061850D /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 61A191672F792A1E0061850D /* Config */;
+			baseConfigurationReferenceRelativePath = Debug.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -337,6 +395,8 @@
 		};
 		61A1914F2F7921AF0061850D /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReferenceAnchor = 61A191672F792A1E0061850D /* Config */;
+			baseConfigurationReferenceRelativePath = Release.xcconfig;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -398,8 +458,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 88C6Z8ZW5P;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AkFit/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -429,8 +491,10 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 88C6Z8ZW5P;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = AkFit/Info.plist;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -584,6 +648,39 @@
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		61A191792F7930450061850D /* Auth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Auth;
+		};
+		61A1917B2F7930450061850D /* Functions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Functions;
+		};
+		61A1917D2F7930450061850D /* PostgREST */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = PostgREST;
+		};
+		61A1917F2F7930450061850D /* Realtime */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Realtime;
+		};
+		61A191812F7930450061850D /* Storage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Storage;
+		};
+		61A191832F7930450061850D /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 61A191272F7921AE0061850D /* Project object */;
 }
