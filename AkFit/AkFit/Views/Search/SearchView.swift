@@ -69,7 +69,7 @@ struct SearchView: View {
                 .font(.system(size: 36))
                 .foregroundStyle(Color(.systemGray3))
                 .padding(.bottom, 4)
-            Text("No results for "\(query.trimmingCharacters(in: .whitespaces))"")
+            Text("No results for \"\(query.trimmingCharacters(in: .whitespaces))\"")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

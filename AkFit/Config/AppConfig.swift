@@ -4,9 +4,14 @@ enum AppConfig {
     static let supabaseURL: URL = {
         guard
             let raw = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
-            let url = URL(string: raw)
+            let url = URL(string: raw),
+            let host = url.host, !host.isEmpty
         else {
-            fatalError("Missing or invalid SUPABASE_URL in Info.plist / xcconfig")
+            fatalError(
+                "SUPABASE_URL is missing or malformed in Info.plist / xcconfig. " +
+                "Expected a full HTTPS URL, e.g. https:/$()/your-project.supabase.co — " +
+                "note: use $()/ to escape // in xcconfig files."
+            )
         }
         return url
     }()

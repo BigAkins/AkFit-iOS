@@ -1,4 +1,5 @@
 import SwiftUI
+import Supabase
 
 /// Multi-step onboarding flow.
 ///
