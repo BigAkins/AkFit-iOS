@@ -41,6 +41,11 @@ final class AuthManager {
     /// `true` when the user has completed onboarding (has an active goal).
     var isOnboarded: Bool { goal != nil }
 
+    /// The authenticated user's email address. `nil` when signed out.
+    /// Use this instead of accessing `session.user.email` directly in views,
+    /// so views don't need to import Supabase's Auth module.
+    var currentUserEmail: String? { session?.user.email }
+
     // MARK: - Init
 
     init() {

@@ -13,9 +13,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
-                if let session = authManager.session {
+                if authManager.isAuthenticated {
                     Section("Account") {
-                        LabeledContent("Email", value: session.user.email ?? "—")
+                        LabeledContent("Email", value: authManager.currentUserEmail ?? "—")
                     }
                 }
 
