@@ -1,0 +1,52 @@
+# macOS
+.DS_Store
+
+# Xcode user-specific files
+xcuserdata/
+*.xcuserstate
+
+# Xcode / Swift build artifacts
+.build/
+DerivedData/
+*.hmap
+
+# App packaging / symbols
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+# Keep Package.resolved committed for app reproducibility unless you have a specific reason not to.
+# GitHub's Swift template comments it out by default rather than ignoring it.
+# .swiftpm can usually stay out unless you intentionally rely on shared package config
+.swiftpm/
+
+# Local environment / secrets
+.env
+.env.*
+*.env
+Secrets.xcconfig
+Config.local.xcconfig
+*.secret
+*.secrets
+
+# Local app config overrides
+LocalConfig.swift
+SupabaseConfig.local.swift
+
+# Xcode archives / local build output
+archive/
+build/
+
+# Fastlane outputs, if you add Fastlane later
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Logs
+*.log
