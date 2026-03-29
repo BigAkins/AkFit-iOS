@@ -2,13 +2,15 @@ import SwiftUI
 
 /// Food search screen — the entry point for the logging loop.
 ///
+/// Reachable directly via the Search tab or by tapping the dashboard FAB
+/// (which sets `AppRouter.selectedTab = .search`).
+///
 /// Data is sourced from `FoodSearchService`. The current implementation uses
 /// a local mock dataset. Swap `searchService` for a Supabase or API-backed
 /// implementation when a real food database is available.
 ///
-/// Navigation to food detail (portion selection + logging) is wired via
-/// `NavigationLink` with a placeholder destination, ready to be filled in
-/// the next milestone.
+/// Tapping a result pushes `FoodDetailView` onto the `NavigationStack`,
+/// where the user adjusts quantity and taps "Log food" to persist the entry.
 struct SearchView: View {
     @State private var query: String = ""
     @State private var results: [FoodItem] = []

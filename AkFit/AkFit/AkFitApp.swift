@@ -4,12 +4,14 @@ import SwiftUI
 struct AkFitApp: App {
     @State private var authManager = AuthManager()
     @State private var logStore    = FoodLogStore()
+    @State private var router      = AppRouter()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(authManager)
                 .environment(logStore)
+                .environment(router)
         }
     }
 }

@@ -1,21 +1,23 @@
 import SwiftUI
 
+/// Root tab container. Tab selection is driven by `AppRouter` so any child
+/// view can navigate programmatically — e.g. the dashboard FAB jumps to Search.
 struct MainTabView: View {
+    @Environment(AppRouter.self) private var router
+
     var body: some View {
-        TabView {
-            Tab("Dashboard", systemImage: "chart.bar.fill") {
+        @Bindable var router = router
+        TabView(selection: $router.selectedTab) {
+            Tab("Dashboard", systemImage: "chart.bar.fill", value: AppTab.dashboard) {
                 DashboardView()
             }
-
-            Tab("Search", systemImage: "magnifyingglass") {
+            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
                 SearchView()
             }
-
-            Tab("Progress", systemImage: "chart.line.uptrend.xyaxis") {
+            Tab("Progress", systemImage: "chart.line.uptrend.xyaxis", value: AppTab.progress) {
                 ProgressTabView()
             }
-
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
                 SettingsView()
             }
         }
@@ -24,7 +26,7 @@ struct MainTabView: View {
 
 #Preview {
     // AuthManager needs a goal so DashboardView renders targets, not a blank screen.
-    // FoodLogStore is required by DashboardView and FoodDetailView (via SearchView).
+    // FoodLogStore and AppRouter are required by DashboardView.
     let auth = AuthManager(previewMode: true)
     auth.markOnboarded(
         goal: UserGoal(
@@ -41,4 +43,5 @@ struct MainTabView: View {
     return MainTabView()
         .environment(auth)
         .environment(FoodLogStore())
+        .environment(AppRouter())
 }

@@ -7,14 +7,12 @@ import SwiftUI
 /// - Consumed values are computed from `FoodLogStore.todayLogs`.
 /// - `FoodLogStore.refreshToday` is called once on first appear via `.task`.
 ///
-/// When `FoodLogStore.insert` succeeds (triggered from `FoodDetailView`), it
-/// appends the new row to `todayLogs` in memory. Observation propagates the
-/// change here — no manual refresh or refetch needed after logging.
+/// **FAB action:** tapping the floating + button sets `AppRouter.selectedTab = .search`,
+/// switching the user directly into the Search tab to start logging.
 struct DashboardView: View {
     @Environment(AuthManager.self)  private var authManager
     @Environment(FoodLogStore.self) private var logStore
-
-    @State private var showAddSheet = false
+    @Environment(AppRouter.self)    private var router
 
     /// Targets from the active goal + consumed totals from today's log entries.
     /// Computed synchronously — no async work in the view.
@@ -55,9 +53,9 @@ struct DashboardView: View {
                 }
             }
 
-            // Floating add button — opens search / logging sheet
+            // Floating add button — jumps directly to the Search tab.
             Button {
-                showAddSheet = true
+                router.selectedTab = .search
             } label: {
                 Image(systemName: "plus")
                     .font(.title2.weight(.semibold))
@@ -69,9 +67,6 @@ struct DashboardView: View {
             }
             .padding(.trailing, 24)
             .padding(.bottom, 16)
-        }
-        .sheet(isPresented: $showAddSheet) {
-            AddFoodPlaceholder()
         }
     }
 }
@@ -244,8 +239,8 @@ private struct FoodLogRow: View {
     let log: FoodLog
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(log.foodName)
                     .font(.body.weight(.medium))
                     .foregroundStyle(.primary)
@@ -254,10 +249,20 @@ private struct FoodLogRow: View {
                 Text(servingText)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+
+                // Compact P / C / F chips — same colour scheme as search results
+                HStack(spacing: 8) {
+                    macroChip("P", value: log.proteinG, color: .red)
+                    macroChip("C", value: log.carbsG,   color: .orange)
+                    macroChip("F", value: log.fatG,     color: .blue)
+                }
+                .font(.caption)
+                .padding(.top, 1)
             }
 
             Spacer()
 
+            // Calorie count — top-aligned with the food name
             HStack(alignment: .lastTextBaseline, spacing: 2) {
                 Text("\(log.calories)")
                     .font(.body.weight(.bold))
@@ -266,9 +271,20 @@ private struct FoodLogRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .padding(.top, 2)
         }
-        .padding(.vertical, 11)
+        .padding(.vertical, 12)
         .padding(.horizontal, 16)
+    }
+
+    private func macroChip(_ label: String, value: Double, color: Color) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .fontWeight(.semibold)
+                .foregroundStyle(color)
+            Text("\(Int(value.rounded()))g")
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var servingText: String {
@@ -309,43 +325,9 @@ private struct ProgressRing: View {
     }
 }
 
-// MARK: - Add food placeholder sheet
-
-/// Placeholder presented by the FAB until FAB → search navigation is wired.
-private struct AddFoodPlaceholder: View {
-    var body: some View {
-        VStack(spacing: 0) {
-            Capsule()
-                .fill(Color(.systemGray4))
-                .frame(width: 36, height: 4)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
-
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 36))
-                .foregroundStyle(Color(.systemGray3))
-                .padding(.bottom, 12)
-
-            Text("Use the Search tab to log food")
-                .font(.headline)
-
-            Text("Tap Search at the bottom, find a food,\nthen tap \"Log food\" to add it here.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-                .padding(.top, 4)
-
-            Spacer()
-        }
-        .presentationDetents([.medium])
-    }
-}
-
 // MARK: - Preview helpers
 
 private extension DashboardView {
-    /// Builds a preview-ready `AuthManager` with a fat-loss goal set.
     static func previewAuth() -> AuthManager {
         let auth = AuthManager(previewMode: true)
         auth.markOnboarded(
@@ -363,7 +345,6 @@ private extension DashboardView {
         return auth
     }
 
-    /// Two realistic food log entries for the populated preview state.
     /// Consumed: 402 kcal · P 52g · C 26g · F 8g
     static var previewLogs: [FoodLog] {
         let uid = UUID()
@@ -392,10 +373,12 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth())
         .environment(FoodLogStore(previewLogs: DashboardView.previewLogs))
+        .environment(AppRouter())
 }
 
 #Preview("Empty state") {
     DashboardView()
         .environment(DashboardView.previewAuth())
         .environment(FoodLogStore())
+        .environment(AppRouter())
 }
