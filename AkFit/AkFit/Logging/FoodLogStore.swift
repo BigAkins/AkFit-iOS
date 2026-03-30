@@ -95,6 +95,19 @@ final class FoodLogStore {
         todayLogs.append(saved)
     }
 
+    // MARK: - Delete
+
+    /// Deletes a food log entry from Supabase, then removes it from `todayLogs`.
+    /// Throws on network or server errors so the caller can surface feedback.
+    func delete(logId: UUID) async throws {
+        try await SupabaseClientProvider.shared
+            .from("food_logs")
+            .delete()
+            .eq("id", value: logId.uuidString)
+            .execute()
+        todayLogs.removeAll { $0.id == logId }
+    }
+
     // MARK: - Private helpers
 
     /// Returns ISO 8601 strings for the start and exclusive end of today in the

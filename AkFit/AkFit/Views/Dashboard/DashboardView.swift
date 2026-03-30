@@ -36,7 +36,7 @@ struct DashboardView: View {
                         VStack(spacing: 16) {
                             CalorieSummaryCard(summary: summary)
                             MacroRow(summary: summary)
-                            FoodLogSection(logs: logStore.todayLogs)
+                            FoodLogSection(logs: logStore.todayLogs, logStore: logStore)
                         }
                         .padding(.horizontal, 16)
                         .padding(.top, 8)
@@ -183,6 +183,7 @@ private struct MacroCard: View {
 
 private struct FoodLogSection: View {
     let logs: [FoodLog]
+    let logStore: FoodLogStore
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -222,6 +223,13 @@ private struct FoodLogSection: View {
         VStack(spacing: 0) {
             ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
                 FoodLogRow(log: log)
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            Task { try? await logStore.delete(logId: log.id) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
                 if index < logs.count - 1 {
                     Divider()
                         .padding(.leading, 16)
