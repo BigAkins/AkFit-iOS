@@ -25,9 +25,13 @@ struct SearchView: View {
     @State private var showScanner = false
     /// Set when a barcode scan resolves to a food item. Triggers navigation to `FoodDetailView`.
     @State private var scannedFood: FoodItem? = nil
+    /// The log entry currently shown in the confirmation banner. Nil hides the banner.
+    @State private var bannerEntry: FoodLog? = nil
+    @State private var autoDismissTask: Task<Void, Never>? = nil
 
     @Environment(FoodLogStore.self) private var logStore
     @Environment(AuthManager.self)  private var authManager
+    @Environment(AppRouter.self)    private var router
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -73,6 +77,28 @@ struct SearchView: View {
                 }
             }
             .onChange(of: query) { performSearch() }
+            .onChange(of: logStore.lastLoggedEntry?.id) { _, newId in
+                guard newId != nil else { return }
+                let captured = logStore.lastLoggedEntry
+                logStore.clearLastLog()
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                    bannerEntry = captured
+                }
+                autoDismissTask?.cancel()
+                autoDismissTask = Task {
+                    try? await Task.sleep(for: .seconds(4))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                        bannerEntry = nil
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if bannerEntry != nil {
+                    logBanner
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .task {
                 // Fetch suggestions and recent foods concurrently on first appear.
                 async let fetchedSuggestions = suggestionService.fetchSuggestions()
@@ -157,6 +183,56 @@ struct SearchView: View {
         } label: {
             FoodRow(food: food)
         }
+    }
+
+    // MARK: - Post-log banner
+
+    private var logBanner: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+                .font(.body.weight(.medium))
+            Text("Food logged")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+            Button("View") { dismissBanner(navigateToDashboard: true) }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color(UIColor.systemBackground))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background(Color.primary)
+                .clipShape(Capsule())
+            Button("Undo") { undoLastLog() }
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(UIColor.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: .black.opacity(0.1), radius: 10, x: 0, y: 3)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+
+    private func dismissBanner(navigateToDashboard: Bool = false) {
+        autoDismissTask?.cancel()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            bannerEntry = nil
+        }
+        if navigateToDashboard {
+            router.selectedTab = .dashboard
+        }
+    }
+
+    private func undoLastLog() {
+        guard let entry = bannerEntry else { return }
+        autoDismissTask?.cancel()
+        withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+            bannerEntry = nil
+        }
+        Task { try? await logStore.delete(logId: entry.id) }
     }
 
     // MARK: - Search logic
@@ -264,6 +340,7 @@ private struct MacroLine: View {
     SearchView()
         .environment(FoodLogStore())
         .environment(AuthManager(previewMode: true))
+        .environment(AppRouter())
 }
 
 #Preview("With recents") {
@@ -285,4 +362,5 @@ private struct MacroLine: View {
     SearchView()
         .environment(FoodLogStore(previewRecents: recents))
         .environment(AuthManager(previewMode: true))
+        .environment(AppRouter())
 }

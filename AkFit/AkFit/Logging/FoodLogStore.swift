@@ -33,6 +33,11 @@ final class FoodLogStore {
     /// True while `refreshToday` is in flight. Use for subtle loading states.
     private(set) var isRefreshing: Bool = false
 
+    /// Set to the saved `FoodLog` immediately after a successful `insert`.
+    /// Consumed by `SearchView` to show the post-log confirmation banner.
+    /// Cleared by `clearLastLog()` once the banner has been displayed.
+    private(set) var lastLoggedEntry: FoodLog? = nil
+
     // MARK: - Init
 
     /// Default initializer — starts with empty state.
@@ -46,6 +51,13 @@ final class FoodLogStore {
         self.todayLogs   = previewLogs
         self.recentFoods = previewRecents
         self.weekLogs    = previewWeekLogs
+    }
+
+    // MARK: - Banner state
+
+    /// Clears `lastLoggedEntry` after the banner has been picked up by the UI.
+    func clearLastLog() {
+        lastLoggedEntry = nil
     }
 
     // MARK: - Fetch
@@ -170,6 +182,8 @@ final class FoodLogStore {
             .filter { seen.insert($0.foodName).inserted }
             .prefix(8)
             .map { $0 }
+
+        lastLoggedEntry = saved
     }
 
     // MARK: - Delete
@@ -183,8 +197,9 @@ final class FoodLogStore {
             .delete()
             .eq("id", value: logId.uuidString)
             .execute()
-        todayLogs.removeAll { $0.id == logId }
-        weekLogs.removeAll  { $0.id == logId }
+        todayLogs.removeAll   { $0.id == logId }
+        weekLogs.removeAll    { $0.id == logId }
+        recentFoods.removeAll { $0.id == logId }
     }
 
     // MARK: - Private helpers
