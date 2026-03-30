@@ -44,5 +44,6 @@ struct MainTabView: View {
         .environment(auth)
         .environment(FoodLogStore())
         .environment(FavoriteFoodStore())
+        .environment(BodyweightStore())
         .environment(AppRouter())
 }
