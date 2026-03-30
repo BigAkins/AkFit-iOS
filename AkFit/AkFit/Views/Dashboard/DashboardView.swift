@@ -46,7 +46,7 @@ struct DashboardView: View {
                 .navigationTitle("Today")
                 .task {
                     // Fetch today's logs once on first appear.
-                    // After logging, FoodLogStore appends in memory so no re-fetch needed.
+                    // After logging, FoodLogStore appends in memory — no re-fetch needed.
                     if let userId = authManager.currentUserId {
                         await logStore.refreshToday(userId: userId)
                     }
@@ -86,15 +86,20 @@ private struct CalorieSummaryCard: View {
                     .contentTransition(.numericText())
                     .animation(.snappy, value: summary.remainingCalories)
 
-                Text("Calories remaining")
+                Text("kcal remaining")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
 
-                Spacer().frame(height: 2)
-
-                Text("of \(summary.targetCalories) target")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
+                // Consumed + goal context — surfaced so users can see
+                // both "what's left" and "what I've already had" without math.
+                HStack(spacing: 4) {
+                    Text("\(summary.consumedCalories) consumed")
+                    Text("·").foregroundStyle(.tertiary)
+                    Text("\(summary.targetCalories) goal")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.top, 2)
             }
 
             Spacer()
@@ -121,38 +126,52 @@ private struct MacroRow: View {
         HStack(spacing: 12) {
             MacroCard(
                 name: "Protein",
-                remaining: summary.remainingProteinG,
+                consumed: summary.consumedProteinG,
                 target: summary.targetProteinG,
-                progress: summary.proteinProgress,
                 color: .red
             )
             MacroCard(
                 name: "Carbs",
-                remaining: summary.remainingCarbsG,
+                consumed: summary.consumedCarbsG,
                 target: summary.targetCarbsG,
-                progress: summary.carbsProgress,
                 color: .orange
             )
             MacroCard(
                 name: "Fat",
-                remaining: summary.remainingFatG,
+                consumed: summary.consumedFatG,
                 target: summary.targetFatG,
-                progress: summary.fatProgress,
                 color: .blue
             )
         }
     }
 }
 
+/// Macro card showing remaining grams, a thin horizontal progress bar,
+/// and the daily target as context.
+///
+/// Uses `consumed` + `target` as source of truth — `remaining` and `progress`
+/// are derived internally so callers don't have to compute them twice.
 private struct MacroCard: View {
     let name: String
-    let remaining: Int
+    let consumed: Int
     let target: Int
-    let progress: Double
     let color: Color
 
+    private var remaining: Int {
+        max(0, target - consumed)
+    }
+
+    private var progress: Double {
+        guard target > 0 else { return 0 }
+        return min(1.0, Double(consumed) / Double(target))
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(name)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(color)
+
             Text("\(remaining)g")
                 .font(.title3.weight(.bold))
                 .monospacedDigit()
@@ -160,17 +179,24 @@ private struct MacroCard: View {
                 .contentTransition(.numericText())
                 .animation(.snappy, value: remaining)
 
-            Text(name)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.secondary)
+            // Thin horizontal progress bar — fill represents consumed fraction.
+            // Consistent with the macro bars in ProgressTabView.
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color.opacity(0.15))
+                        .frame(height: 4)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(color.opacity(consumed > 0 ? 1.0 : 0.0))
+                        .frame(width: geo.size.width * progress, height: 4)
+                        .animation(.easeOut(duration: 0.5), value: progress)
+                }
+            }
+            .frame(height: 4)
 
-            Text("remaining")
+            Text("of \(target)g")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
-
-            ProgressRing(progress: progress, color: color, size: 36, lineWidth: 4)
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 6)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -185,11 +211,27 @@ private struct FoodLogSection: View {
     let logs: [FoodLog]
     let logStore: FoodLogStore
 
+    /// Running calorie total for the day — shown in the section header
+    /// so users can check consumed intake without reading individual rows.
+    private var totalCalories: Int {
+        logs.reduce(0) { $0 + $1.calories }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Today's food")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .firstTextBaseline) {
+                Text("Today's food")
+                    .font(.headline)
+                Spacer()
+                if !logs.isEmpty {
+                    Text("\(totalCalories) kcal")
+                        .font(.subheadline.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: totalCalories)
+                }
+            }
 
             if logs.isEmpty {
                 emptyState
@@ -246,6 +288,14 @@ private struct FoodLogSection: View {
 private struct FoodLogRow: View {
     let log: FoodLog
 
+    /// Shared formatter — avoids allocation on every row render.
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        f.dateStyle = .none
+        return f
+    }()
+
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -258,7 +308,7 @@ private struct FoodLogRow: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
-                // Compact P / C / F chips — same colour scheme as search results
+                // Compact P / C / F chips — consistent colour scheme across the app
                 HStack(spacing: 8) {
                     macroChip("P", value: log.proteinG, color: .red)
                     macroChip("C", value: log.carbsG,   color: .orange)
@@ -270,14 +320,20 @@ private struct FoodLogRow: View {
 
             Spacer()
 
-            // Calorie count — top-aligned with the food name
-            HStack(alignment: .lastTextBaseline, spacing: 2) {
-                Text("\(log.calories)")
-                    .font(.body.weight(.bold))
-                    .monospacedDigit()
-                Text("kcal")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            // Calorie count + time — top-aligned with the food name.
+            // The time helps users recall which meal each entry belongs to.
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(alignment: .lastTextBaseline, spacing: 2) {
+                    Text("\(log.calories)")
+                        .font(.body.weight(.bold))
+                        .monospacedDigit()
+                    Text("kcal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(Self.timeFormatter.string(from: log.loggedAt))
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
             }
             .padding(.top, 2)
         }
@@ -316,7 +372,7 @@ private struct FoodLogRow: View {
 private struct ProgressRing: View {
     let progress: Double  // 0.0 – 1.0
     let color: Color
-    var size: CGFloat     = 80
+    var size: CGFloat      = 80
     var lineWidth: CGFloat = 8
 
     var body: some View {
@@ -353,23 +409,36 @@ private extension DashboardView {
         return auth
     }
 
-    /// Consumed: 402 kcal · P 52g · C 26g · F 8g
+    /// Three realistic log entries spread across different times of day.
+    /// Total: 522 kcal · P 76g · C 29g · F 10g consumed
+    /// Remaining: 1578 kcal · P 89g · C 191g · F 55g
     static var previewLogs: [FoodLog] {
         let uid = UUID()
+        let now = Date()
         return [
-            FoodLog(
-                id: UUID(), userId: uid,
-                foodName: "Chicken Breast, cooked", servingLabel: "100g",
-                quantity: 1.5,
-                calories: 248, proteinG: 46.5, carbsG: 0,  fatG: 5.4,
-                loggedAt: Date(), createdAt: Date()
-            ),
             FoodLog(
                 id: UUID(), userId: uid,
                 foodName: "Oats, rolled", servingLabel: "40g (½ cup)",
                 quantity: 1.0,
-                calories: 154, proteinG: 5.4,  carbsG: 26, fatG: 2.8,
-                loggedAt: Date(), createdAt: Date()
+                calories: 154, proteinG: 5.4, carbsG: 26.0, fatG: 2.8,
+                loggedAt: now.addingTimeInterval(-5 * 3600), // 5 hours ago
+                createdAt: now.addingTimeInterval(-5 * 3600)
+            ),
+            FoodLog(
+                id: UUID(), userId: uid,
+                foodName: "Chicken Breast, cooked", servingLabel: "100g",
+                quantity: 1.5,
+                calories: 248, proteinG: 46.5, carbsG: 0,   fatG: 5.4,
+                loggedAt: now.addingTimeInterval(-3 * 3600), // 3 hours ago
+                createdAt: now.addingTimeInterval(-3 * 3600)
+            ),
+            FoodLog(
+                id: UUID(), userId: uid,
+                foodName: "Whey Protein", servingLabel: "1 scoop (30g)",
+                quantity: 1.0,
+                calories: 120, proteinG: 24.0, carbsG: 3.0, fatG: 1.5,
+                loggedAt: now.addingTimeInterval(-1 * 3600), // 1 hour ago
+                createdAt: now.addingTimeInterval(-1 * 3600)
             ),
         ]
     }
