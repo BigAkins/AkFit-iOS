@@ -2,24 +2,25 @@ import SwiftUI
 import VisionKit
 import AVFoundation
 
-/// Full-screen barcode scanner sheet.
+/// Full-screen barcode scanner cover.
 ///
 /// Presented from `SearchView` via the barcode icon in the search toolbar.
 ///
 /// **State machine:**
 /// 1. On appear, checks `DataScannerViewController.isSupported` and camera permission.
 /// 2. If authorized: shows live camera via `DataScannerViewController` with a
-///    corner-bracket viewfinder overlay.
-/// 3. On first barcode detection: calls `BarcodeLookupService.lookup`.
+///    corner-bracket viewfinder overlay and an animated scan line.
+/// 3. On first barcode detection: plays a medium impact haptic, calls `BarcodeLookupService.lookup`.
 /// 4. If found: calls `onFound(_:)` and dismisses — the caller navigates to `FoodDetailView`.
-/// 5. If not found: shows a "not found" banner; "Try again" resets the scanner.
+/// 5. If not found: shows a "Product not found" panel; "Try again" resets the scanner,
+///    "Search manually" dismisses so the user can type the food name.
 /// 6. Unsupported device / denied / restricted: shows clear fallback with action where possible.
 ///
-/// **Swap the lookup layer:** replace `MockBarcodeLookupService` with any
+/// **Swap the lookup layer:** replace `OpenFoodFactsService()` with any
 /// `BarcodeLookupService` conformer — the scanner UI is completely decoupled.
 struct BarcodeScannerView: View {
     /// Called with the resolved `FoodItem` when a barcode is successfully looked up.
-    /// The scanner dismisses itself immediately after calling this.
+    /// The scanner dismisses itself shortly after calling this.
     let onFound: (FoodItem) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -27,6 +28,10 @@ struct BarcodeScannerView: View {
     /// Incrementing this value forces `DataScannerRepresentable` to be fully
     /// recreated (new VC, new coordinator) so scanning resets after "Try again".
     @State private var scanAttempt: Int = 0
+    /// Y-offset of the animated scan line inside the viewfinder brackets.
+    @State private var scanLineOffset: CGFloat = -70
+    /// Toggled each time a barcode is first detected to trigger the impact haptic.
+    @State private var didDetect = false
 
     private let lookupService: any BarcodeLookupService = OpenFoodFactsService()
 
@@ -39,7 +44,7 @@ struct BarcodeScannerView: View {
         case scanning
         /// A barcode was detected; lookup is in progress.
         case looking
-        /// Barcode detected but not in the lookup database. Stores the raw value.
+        /// Barcode detected but not found in the lookup database.
         case notFound(String)
         /// `DataScannerViewController.isSupported` returned `false`.
         case unsupported
@@ -47,6 +52,13 @@ struct BarcodeScannerView: View {
         case permissionDenied
         /// Camera access is restricted (managed device, parental controls, etc.).
         case permissionRestricted
+    }
+
+    /// `true` only during the `.scanning` state. Used to animate hint text in/out
+    /// without causing a layout shift.
+    private var isActivelyScanning: Bool {
+        if case .scanning = scanState { return true }
+        return false
     }
 
     // MARK: - Body
@@ -62,14 +74,14 @@ struct BarcodeScannerView: View {
 
             case .scanning, .looking, .notFound:
                 cameraLayer
-                viewfinderOverlay
+                bracketOverlay
                 topBar
 
                 if case .looking = scanState {
                     lookingIndicator
                 }
-                if case .notFound(let code) = scanState {
-                    notFoundBanner(code)
+                if case .notFound = scanState {
+                    notFoundPanel
                 }
 
             case .permissionDenied:
@@ -100,18 +112,19 @@ struct BarcodeScannerView: View {
                 )
             }
         }
+        .sensoryFeedback(.impact(weight: .medium), trigger: didDetect)
         .task { await checkPermission() }
     }
 
     // MARK: - Camera layer
 
-    /// Live camera feed. Only shown when a scan attempt is active.
-    /// `.id(scanAttempt)` forces full recreation on retry.
+    /// Live camera feed. `.id(scanAttempt)` forces full VC recreation on retry.
     @ViewBuilder
     private var cameraLayer: some View {
         DataScannerRepresentable { barcode in
             // Guard ensures only one lookup runs at a time.
             guard case .scanning = scanState else { return }
+            didDetect.toggle()   // triggers the impact haptic
             scanState = .looking
             Task { await lookup(barcode: barcode) }
         }
@@ -119,21 +132,57 @@ struct BarcodeScannerView: View {
         .ignoresSafeArea()
     }
 
-    // MARK: - Overlays
+    // MARK: - Bracket overlay
 
-    private var viewfinderOverlay: some View {
+    /// Corner-bracket viewfinder with an animated scan line (scanning state only)
+    /// and a hint label that fades out via opacity — no layout shift on state change.
+    private var bracketOverlay: some View {
         VStack {
             Spacer()
-            ViewfinderBrackets()
-                .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                .frame(width: 260, height: 170)
+
+            ZStack {
+                ViewfinderBrackets()
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+
+                // Animated scan line — only shown while actively scanning.
+                if case .scanning = scanState {
+                    Rectangle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, .white.opacity(0.55), .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                        .frame(width: 200, height: 2)
+                        .clipShape(RoundedRectangle(cornerRadius: 1))
+                        .offset(y: scanLineOffset)
+                        .onAppear {
+                            scanLineOffset = -70
+                            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+                                scanLineOffset = 70
+                            }
+                        }
+                        .onDisappear {
+                            scanLineOffset = -70
+                        }
+                }
+            }
+            .frame(width: 260, height: 170)
+
             Spacer()
-            Text("Point at a barcode")
+
+            // Hint text occupies a fixed slot so the brackets never shift.
+            Text("Align barcode within the frame")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.70))
+                .opacity(isActivelyScanning ? 1 : 0)
+                .animation(.easeOut(duration: 0.2), value: isActivelyScanning)
                 .padding(.bottom, 90)
         }
     }
+
+    // MARK: - Top bar
 
     private var topBar: some View {
         VStack {
@@ -155,6 +204,8 @@ struct BarcodeScannerView: View {
         }
     }
 
+    // MARK: - Looking indicator
+
     private var lookingIndicator: some View {
         VStack {
             Spacer()
@@ -171,25 +222,52 @@ struct BarcodeScannerView: View {
         }
     }
 
-    private func notFoundBanner(_ barcode: String) -> some View {
+    // MARK: - Not-found panel
+
+    /// Shown when a barcode was detected but returned no match from the lookup service.
+    /// Primary action: dismiss so the user can search by name.
+    /// Secondary action: try again with the same or a different barcode.
+    private var notFoundPanel: some View {
         VStack {
             Spacer()
-            VStack(spacing: 14) {
-                Image(systemName: "questionmark.circle")
-                    .font(.system(size: 32))
+            VStack(spacing: 16) {
+                Image(systemName: "barcode.viewfinder")
+                    .font(.system(size: 40))
                     .foregroundStyle(.secondary)
-                Text("Barcode not found")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text(barcode)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                Button("Try again") {
-                    scanAttempt += 1
-                    scanState = .scanning
+
+                VStack(spacing: 6) {
+                    Text("Product not found")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("Try searching by name instead.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+
+                VStack(spacing: 8) {
+                    // Primary CTA — most useful action after a miss.
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Search manually")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(Color.primary)
+                            .foregroundStyle(Color(UIColor.systemBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                    }
+
+                    // Secondary — if the first scan failed due to angle or lighting.
+                    Button("Try again") {
+                        scanAttempt += 1
+                        scanState = .scanning
+                    }
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+                }
                 .padding(.top, 2)
             }
             .padding(24)
@@ -199,6 +277,8 @@ struct BarcodeScannerView: View {
             .padding(.bottom, 60)
         }
     }
+
+    // MARK: - Permission block view
 
     private func permissionBlockView(
         icon: String,
@@ -260,6 +340,8 @@ struct BarcodeScannerView: View {
         switch result {
         case .found(let food):
             onFound(food)
+            // Brief pause so the impact haptic completes before the cover dismisses.
+            try? await Task.sleep(for: .milliseconds(200))
             dismiss()
         case .notFound:
             scanState = .notFound(barcode)

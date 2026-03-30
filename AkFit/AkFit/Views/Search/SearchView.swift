@@ -30,6 +30,10 @@ struct SearchView: View {
     @State private var showScanner = false
     /// Set when a barcode scan resolves to a food item. Triggers navigation to `FoodDetailView`.
     @State private var scannedFood: FoodItem? = nil
+    /// Staging area: holds the scanned food until the scanner cover fully dismisses,
+    /// then promotes it to `scannedFood` via `onDismiss`. This ensures the navigation
+    /// push happens after the cover animation completes — no overlapping transitions.
+    @State private var pendingScannedFood: FoodItem? = nil
     /// The log entry currently shown in the confirmation banner. Nil hides the banner.
     @State private var bannerEntry: FoodLog? = nil
     @State private var autoDismissTask: Task<Void, Never>? = nil
@@ -77,9 +81,14 @@ struct SearchView: View {
             .navigationDestination(item: $scannedFood) { food in
                 FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
             }
-            .sheet(isPresented: $showScanner) {
+            .fullScreenCover(isPresented: $showScanner, onDismiss: {
+                // Promote the pending food to scannedFood only after the cover
+                // has fully dismissed, keeping the navigation push clean.
+                scannedFood = pendingScannedFood
+                pendingScannedFood = nil
+            }) {
                 BarcodeScannerView { food in
-                    scannedFood = food
+                    pendingScannedFood = food
                 }
             }
             .onChange(of: query) { performSearch() }
