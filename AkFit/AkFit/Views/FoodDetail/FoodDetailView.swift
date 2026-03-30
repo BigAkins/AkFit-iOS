@@ -1,13 +1,17 @@
 import SwiftUI
 
-/// Food detail screen — macro summary and portion stepper for the selected food.
+/// Food detail screen — macro summary and portion selector for the selected food.
 ///
-/// **Data flow:** `FoodItem` arrives by value from `SearchView`. All macro values
-/// are scaled by `quantity` entirely within this view — the model is never mutated.
+/// **Data flow:** `FoodItem` arrives by value from `SearchView` (or barcode scan).
+/// All macro values are scaled by `quantity` entirely within this view — the
+/// model is never mutated.
 ///
-/// **Logging:** tapping "Log food" calls `FoodLogStore.insert` (environment) which
-/// persists to Supabase and appends to `todayLogs` in memory. `DashboardView`
-/// re-renders automatically via Observation — no manual refresh needed.
+/// **Portion selection:** ±0.25 step stepper, range 0.25–10. The calorie card,
+/// macro columns, and log button all update live as the user adjusts quantity.
+///
+/// **Logging:** tapping "Log food" calls `FoodLogStore.insert` (environment)
+/// which persists to Supabase and appends to `todayLogs` in memory.
+/// `DashboardView` re-renders automatically via Observation — no manual refresh needed.
 struct FoodDetailView: View {
     let food: FoodItem
 
@@ -19,7 +23,7 @@ struct FoodDetailView: View {
     @Environment(AuthManager.self)  private var authManager
     @Environment(\.dismiss)         private var dismiss
 
-    // MARK: - Scaled nutrition values
+    // MARK: - Scaled nutrition
 
     private var scaledCalories: Int    { Int((Double(food.calories) * quantity).rounded()) }
     private var scaledProteinG: Double { food.proteinG * quantity }
@@ -38,7 +42,7 @@ struct FoodDetailView: View {
                 }
 
                 calorieMacroCard
-                servingCard
+                portionCard
                 Spacer(minLength: 100)
             }
             .padding(.horizontal, 16)
@@ -55,6 +59,7 @@ struct FoodDetailView: View {
 
     private var calorieMacroCard: some View {
         VStack(spacing: 16) {
+            // Calorie row — trailing ×N badge clarifies values are for multiple servings.
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("\(scaledCalories)")
                     .font(.system(size: 52, weight: .bold))
@@ -66,6 +71,14 @@ struct FoodDetailView: View {
                     .font(.title3)
                     .foregroundStyle(.secondary)
                 Spacer()
+                if quantity != 1.0 {
+                    Text("×\(formatQuantity(quantity))")
+                        .font(.callout.weight(.medium))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: quantity)
+                }
             }
 
             Divider()
@@ -98,11 +111,11 @@ struct FoodDetailView: View {
         .frame(maxWidth: .infinity)
     }
 
-    // MARK: - Serving card
+    // MARK: - Portion card
 
-    private var servingCard: some View {
+    private var portionCard: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Serving")
+            Text("Portion")
                 .font(.headline)
 
             HStack(alignment: .center, spacing: 12) {
@@ -113,6 +126,8 @@ struct FoodDetailView: View {
                     Text(servingSummary)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: quantity)
                 }
                 Spacer()
                 QuantityStepper(quantity: $quantity)
@@ -125,8 +140,6 @@ struct FoodDetailView: View {
 
     private var servingSummary: String {
         if quantity == 1.0 { return "1 serving" }
-        // servingWeightG is 0 for foods reconstructed from FoodLog (gram weight
-        // not stored). Show just the serving count in that case.
         guard food.servingWeightG > 0 else {
             return "\(formatQuantity(quantity)) servings"
         }
@@ -160,12 +173,25 @@ struct FoodDetailView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 8) {
+                Group {
                     if isLogging {
-                        ProgressView()
-                            .tint(Color(UIColor.systemBackground))
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .tint(Color(UIColor.systemBackground))
+                            Text("Logging...")
+                        }
+                    } else {
+                        // Live calorie preview — updates as quantity changes.
+                        HStack(spacing: 6) {
+                            Text("Log food")
+                            Text("·")
+                                .opacity(0.5)
+                            Text("\(scaledCalories) kcal")
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .animation(.snappy, value: scaledCalories)
+                        }
                     }
-                    Text(isLogging ? "Logging..." : "Log food")
                 }
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
@@ -201,6 +227,8 @@ struct FoodDetailView: View {
 /// ± stepper for selecting how many servings. Step 0.25, range 0.25–10.
 /// All values are exact multiples of 0.25 (1/4 is exactly representable
 /// in binary floating point), so no floating-point drift occurs.
+///
+/// Plays a light haptic on every step change via `.sensoryFeedback`.
 private struct QuantityStepper: View {
     @Binding var quantity: Double
 
@@ -216,10 +244,12 @@ private struct QuantityStepper: View {
             .disabled(quantity <= minQty)
 
             Text(formatQuantity(quantity))
-                .font(.body.weight(.semibold))
+                .font(.title3.weight(.bold))
                 .monospacedDigit()
-                .frame(minWidth: 44)
+                .frame(minWidth: 56)
                 .multilineTextAlignment(.center)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: quantity)
 
             stepButton("plus") {
                 quantity = min(maxQty, (quantity + step).roundedToNearest(step))
@@ -228,14 +258,15 @@ private struct QuantityStepper: View {
         }
         .foregroundStyle(.primary)
         .background(Color(.systemGray5))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sensoryFeedback(.impact(weight: .light), trigger: quantity)
     }
 
     private func stepButton(_ name: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: name)
                 .font(.system(size: 14, weight: .semibold))
-                .frame(width: 40, height: 40)
+                .frame(width: 44, height: 44)
         }
     }
 }
@@ -259,7 +290,7 @@ private extension Double {
     }
 }
 
-// MARK: - Preview
+// MARK: - Previews
 
 #Preview("Default serving") {
     NavigationStack {
@@ -291,6 +322,24 @@ private extension Double {
             proteinG: 7.0,
             carbsG: 7.0,
             fatG: 16
+        ))
+    }
+    .environment(FoodLogStore())
+    .environment(AuthManager(previewMode: true))
+}
+
+#Preview("Packaged / no gram weight") {
+    NavigationStack {
+        FoodDetailView(food: FoodItem(
+            id: UUID(),
+            name: "Kind Dark Chocolate Nuts & Sea Salt",
+            brandOrCategory: "Kind",
+            servingSize: "1 bar",
+            servingWeightG: 0,
+            calories: 200,
+            proteinG: 6,
+            carbsG: 16,
+            fatG: 15
         ))
     }
     .environment(FoodLogStore())
