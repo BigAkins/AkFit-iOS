@@ -16,6 +16,7 @@ struct SettingsView: View {
     @Environment(NotificationService.self) private var notifications
 
     @State private var showEditGoal          = false
+    @State private var showEditProfile       = false
     @State private var isSigningOut          = false
     @State private var signOutError: String? = nil
     @State private var showSignOutConfirm    = false
@@ -27,6 +28,7 @@ struct SettingsView: View {
             List {
                 accountSection
                 if authManager.goal != nil {
+                    profileSection
                     targetsSection
                 }
                 remindersSection
@@ -43,6 +45,12 @@ struct SettingsView: View {
             .sheet(isPresented: $showEditGoal) {
                 if let goal = authManager.goal {
                     EditGoalView(goal: goal)
+                        .environment(authManager)
+                }
+            }
+            .sheet(isPresented: $showEditProfile) {
+                if let goal = authManager.goal {
+                    EditProfileView(goal: goal)
                         .environment(authManager)
                 }
             }
@@ -92,6 +100,41 @@ struct SettingsView: View {
                 }
             }
             .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - Profile section
+
+    private var profileSection: some View {
+        Section {
+            if let goal = authManager.goal {
+                if let age = goal.age {
+                    LabeledContent("Age", value: "\(age)")
+                }
+                if let cm = goal.heightCm {
+                    LabeledContent("Height", value: formattedHeight(cm))
+                }
+                if let kg = goal.weightKg {
+                    LabeledContent("Weight", value: formattedWeight(kg))
+                }
+                if let sex = goal.sex {
+                    LabeledContent("Sex", value: sex == .male ? "Male" : "Female")
+                }
+                Button {
+                    showEditProfile = true
+                } label: {
+                    HStack {
+                        Text("Edit Profile")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+        } header: {
+            Text("Profile")
         }
     }
 
@@ -331,6 +374,17 @@ struct SettingsView: View {
         }
         if let paceName { return "\(goal.goalType.displayName) · \(paceName)" }
         return goal.goalType.displayName
+    }
+
+    /// Formats a centimetre value as feet and inches, e.g. "5′ 7″".
+    private func formattedHeight(_ cm: Double) -> String {
+        let (ft, ins) = OnboardingData.cmToFeetInches(cm)
+        return "\(ft)′ \(ins)″"
+    }
+
+    /// Formats a kilogram value as whole pounds, e.g. "182 lbs".
+    private func formattedWeight(_ kg: Double) -> String {
+        "\(OnboardingData.kgToLbs(kg)) lbs"
     }
 
     private func signOut() {
