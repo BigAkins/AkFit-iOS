@@ -39,6 +39,33 @@ struct FoodDetailView: View {
     private var scaledCarbsG:   Double { food.carbsG   * quantity }
     private var scaledFatG:     Double { food.fatG     * quantity }
 
+    // MARK: - After-log projection
+
+    /// Projected remaining budget if the user logs this food at the current quantity.
+    ///
+    /// Uses `DaySummary` — the same type used on the Dashboard and Search screen —
+    /// so all arithmetic is consistent. Built entirely from in-memory data:
+    /// no network call is made.
+    ///
+    /// Returns `nil` when no active goal is set (pre-onboarding users, preview
+    /// environments without a seeded goal).
+    private var afterLogSummary: DaySummary? {
+        guard let goal = authManager.goal else { return nil }
+        var s = DaySummary.from(goal: goal)
+        for log in logStore.todayLogs {
+            s.consumedCalories += log.calories
+            s.consumedProteinG += Int(log.proteinG.rounded())
+            s.consumedCarbsG   += Int(log.carbsG.rounded())
+            s.consumedFatG     += Int(log.fatG.rounded())
+        }
+        // Project the current food at the currently-selected quantity.
+        s.consumedCalories += scaledCalories
+        s.consumedProteinG += Int(scaledProteinG.rounded())
+        s.consumedCarbsG   += Int(scaledCarbsG.rounded())
+        s.consumedFatG     += Int(scaledFatG.rounded())
+        return s
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -52,10 +79,17 @@ struct FoodDetailView: View {
 
                 calorieMacroCard
                 portionCard
-                Spacer(minLength: 100)
+
+                // After-log budget preview — only shown when a goal is active.
+                // Values update live as the quantity stepper changes.
+                if let afterSummary = afterLogSummary {
+                    afterLoggingCard(afterSummary)
+                }
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
+            // safeAreaInset already reserves bottom space for the log button;
+            // no manual spacer needed here.
         }
         .navigationTitle(food.name)
         .navigationBarTitleDisplayMode(.large)
@@ -167,6 +201,64 @@ struct FoodDetailView: View {
         }
         let totalG = Int((food.servingWeightG * quantity).rounded())
         return "\(formatQuantity(quantity)) servings · \(totalG)g total"
+    }
+
+    // MARK: - After-logging card
+
+    /// Compact "After this log" card showing projected remaining budget.
+    ///
+    /// Mirrors the color language used across the app:
+    /// calories as the primary value, P → red, C → orange, F → blue.
+    /// All numeric values animate live as the quantity stepper changes.
+    private func afterLoggingCard(_ summary: DaySummary) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("After this log")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            HStack(alignment: .firstTextBaseline) {
+                // Remaining calories — the primary decision signal
+                HStack(alignment: .lastTextBaseline, spacing: 3) {
+                    Text("\(summary.remainingCalories)")
+                        .font(.title3.weight(.bold))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                        .contentTransition(.numericText())
+                        .animation(.snappy, value: summary.remainingCalories)
+                    Text("kcal left")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                // Macro remaining chips — P / C / F
+                HStack(spacing: 10) {
+                    remainingChip("P", value: summary.remainingProteinG, color: .red)
+                    remainingChip("C", value: summary.remainingCarbsG,   color: .orange)
+                    remainingChip("F", value: summary.remainingFatG,     color: .blue)
+                }
+                .font(.caption)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// Colored initial + gram value chip. Matches the style used in
+    /// `SearchDaySummaryCard` and `DashboardView` log rows.
+    private func remainingChip(_ label: String, value: Int, color: Color) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .fontWeight(.semibold)
+                .foregroundStyle(color)
+            Text("\(value)g")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: value)
+        }
     }
 
     // MARK: - Log button
@@ -313,6 +405,51 @@ private extension Double {
 }
 
 // MARK: - Previews
+
+#Preview("After this log card") {
+    // Shows the projected-remaining card with a goal and pre-existing today logs.
+    let auth = AuthManager(previewMode: true)
+    auth.markOnboarded(
+        goal: UserGoal(
+            id: UUID(), userId: UUID(),
+            goalType: .fatLoss,
+            targetCalories: 2100, targetProteinG: 165,
+            targetCarbsG: 220,   targetFatG: 65,
+            heightCm: nil, weightKg: nil, age: nil, sex: nil,
+            activityLevel: nil, pace: nil,
+            isActive: true, createdAt: Date(), updatedAt: Date()
+        ),
+        profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+    )
+    let uid = UUID()
+    let now = Date()
+    let existingLogs = [
+        FoodLog(id: UUID(), userId: uid,
+                foodName: "Oatmeal", servingLabel: "1 cup", quantity: 1.0,
+                calories: 307, proteinG: 11, carbsG: 55, fatG: 5,
+                loggedAt: now, createdAt: now),
+        FoodLog(id: UUID(), userId: uid,
+                foodName: "Greek Yogurt", servingLabel: "200g", quantity: 1.0,
+                calories: 130, proteinG: 17, carbsG: 9, fatG: 3,
+                loggedAt: now, createdAt: now),
+    ]
+    return NavigationStack {
+        FoodDetailView(food: FoodItem(
+            id: UUID(),
+            name: "Chicken Breast, cooked",
+            brandOrCategory: "Poultry",
+            servingSize: "100g",
+            servingWeightG: 100,
+            calories: 165,
+            proteinG: 31,
+            carbsG: 0,
+            fatG: 3.6
+        ))
+    }
+    .environment(FoodLogStore(previewLogs: existingLogs))
+    .environment(FavoriteFoodStore())
+    .environment(auth)
+}
 
 #Preview("Default serving") {
     NavigationStack {
