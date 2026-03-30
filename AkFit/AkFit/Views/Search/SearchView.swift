@@ -26,7 +26,7 @@ struct SearchView: View {
     @Environment(FoodLogStore.self) private var logStore
     @Environment(AuthManager.self)  private var authManager
 
-    private let searchService: any FoodSearchService = OpenFoodFactsService()
+    private let searchService: any FoodSearchService = HybridFoodSearchService()
 
     /// Static fallback list shown below recents (or alone when recents are empty).
     private let suggestions: [FoodItem] = {
