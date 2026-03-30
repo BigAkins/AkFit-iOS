@@ -2,10 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>AkFit</string>
 	<key>NSCameraUsageDescription</key>
 	<string>AkFit uses the camera to scan food barcodes so you can log nutrition quickly and accurately.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>AkFit exports your food logs and bodyweight entries to Apple Health so you can track nutrition and weight trends in one place.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>SUPABASE_URL</key>
