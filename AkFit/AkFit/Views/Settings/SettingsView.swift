@@ -1,21 +1,22 @@
 import SwiftUI
 
-/// Practical settings screen.
+/// Settings screen.
 ///
-/// Shows the signed-in account email, the user's current calorie and macro
-/// targets, and an "Edit targets" action that presents `EditGoalView` as a sheet.
-/// Sign-out is at the bottom.
+/// Surfaces account identity, current daily targets, an entry point into
+/// `EditGoalView`, and sign-out. Intentionally scoped — does not include
+/// notification preferences, billing, or account deletion in MVP.
 ///
 /// **Data sources:**
 /// - `authManager.currentUserEmail` — account identifier
-/// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`,
-///   which is only shown to onboarded users)
+/// - `authManager.profile.createdAt` — member-since year
+/// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
     @Environment(AuthManager.self) private var authManager
 
-    @State private var showEditGoal   = false
-    @State private var isSigningOut   = false
+    @State private var showEditGoal          = false
+    @State private var isSigningOut          = false
     @State private var signOutError: String? = nil
+    @State private var showSignOutConfirm    = false
 
     // MARK: - Body
 
@@ -35,54 +36,140 @@ struct SettingsView: View {
                         .environment(authManager)
                 }
             }
-        }
-    }
-
-    // MARK: - Sections
-
-    private var accountSection: some View {
-        Section("Account") {
-            LabeledContent("Email", value: authManager.currentUserEmail ?? "—")
-        }
-    }
-
-    private var targetsSection: some View {
-        Section("Daily targets") {
-            if let goal = authManager.goal {
-                LabeledContent("Calories",
-                               value: "\(goal.targetCalories) kcal")
-                LabeledContent("Protein",
-                               value: "\(goal.targetProteinG)g")
-                LabeledContent("Carbs",
-                               value: "\(goal.targetCarbsG)g")
-                LabeledContent("Fat",
-                               value: "\(goal.targetFatG)g")
-
-                LabeledContent("Goal", value: goalContext(goal))
-                    .foregroundStyle(.secondary)
-
-                Button("Edit targets") {
-                    showEditGoal = true
-                }
+            // Confirmation dialog — shown before sign-out fires.
+            // Keeps the destructive action intentional and safe against accidental taps.
+            .confirmationDialog(
+                "Sign Out",
+                isPresented: $showSignOutConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Sign Out", role: .destructive) { signOut() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("You'll need to sign in again to access your account.")
             }
         }
     }
 
+    // MARK: - Account section
+
+    private var accountSection: some View {
+        Section {
+            HStack(spacing: 14) {
+                // Avatar circle — uses email initial as identity marker.
+                // No profile photo in MVP; no network call required.
+                ZStack {
+                    Circle()
+                        .fill(Color(.systemGray5))
+                        .frame(width: 52, height: 52)
+                    Text(emailInitial)
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(authManager.currentUserEmail ?? "Signed in")
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+
+                    if let created = authManager.profile?.createdAt {
+                        Text("Member since \(memberYear(created))")
+                            .font(.footnote)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - Targets section
+
+    private var targetsSection: some View {
+        Section {
+            if let goal = authManager.goal {
+                // Calories — primary metric, no color accent.
+                LabeledContent {
+                    Text("\(goal.targetCalories) kcal")
+                        .monospacedDigit()
+                } label: {
+                    Text("Calories")
+                }
+
+                // Macros — color-coded to match the dashboard and food log rows.
+                LabeledContent {
+                    Text("\(goal.targetProteinG)g")
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                        .foregroundStyle(.red)
+                } label: {
+                    Text("Protein")
+                }
+
+                LabeledContent {
+                    Text("\(goal.targetCarbsG)g")
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                        .foregroundStyle(.orange)
+                } label: {
+                    Text("Carbs")
+                }
+
+                LabeledContent {
+                    Text("\(goal.targetFatG)g")
+                        .monospacedDigit()
+                        .fontWeight(.medium)
+                        .foregroundStyle(.blue)
+                } label: {
+                    Text("Fat")
+                }
+
+                // Goal type + pace context.
+                LabeledContent("Goal", value: goalContext(goal))
+                    .foregroundStyle(.secondary)
+
+                // Edit targets — styled as a navigation action row, not a data row.
+                // The chevron visually separates it from the values above.
+                Button {
+                    showEditGoal = true
+                } label: {
+                    HStack {
+                        Text("Edit Targets")
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
+        } header: {
+            Text("Daily targets")
+        }
+    }
+
+    // MARK: - Sign-out section
+
     private var signOutSection: some View {
         Section {
-            Button(role: .destructive) {
-                signOut()
+            // Button sets the confirmation flag — dialog fires before any sign-out
+            // logic runs, preventing accidental account sign-outs.
+            Button {
+                showSignOutConfirm = true
             } label: {
                 HStack {
-                    Text("Sign out")
+                    Text("Sign Out")
+                        .foregroundStyle(.red)
                     Spacer()
                     if isSigningOut { ProgressView() }
                 }
             }
             .disabled(isSigningOut)
 
-            if let signOutError {
-                Text(signOutError)
+            if let err = signOutError {
+                Text(err)
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
@@ -91,13 +178,33 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    /// Returns a concise goal context string, e.g. "Fat Loss · Moderate"
-    /// or just "Maintenance" when pace is not applicable.
+    /// First letter of the email address, uppercased, for the avatar circle.
+    private var emailInitial: String {
+        authManager.currentUserEmail?.first.map(String.init)?.uppercased() ?? "?"
+    }
+
+    /// Formats a date to its 4-digit year string, e.g. "2024".
+    private func memberYear(_ date: Date) -> String {
+        String(Calendar.current.component(.year, from: date))
+    }
+
+    /// Returns a concise goal context string.
+    ///
+    /// Examples: "Fat Loss · Moderate", "Lean Bulk · Fast", "Maintenance"
+    ///
+    /// Uses a short pace name to keep the value readable at settings row width.
+    /// (The full `Pace.displayName` includes the lb/week detail which is too
+    /// verbose for a settings label.)
     private func goalContext(_ goal: UserGoal) -> String {
         if goal.goalType == .maintenance { return goal.goalType.displayName }
-        if let pace = goal.pace {
-            return "\(goal.goalType.displayName) · \(pace.displayName)"
+        let paceName: String? = goal.pace.map {
+            switch $0 {
+            case .slow:     "Slow"
+            case .moderate: "Moderate"
+            case .fast:     "Fast"
+            }
         }
+        if let paceName { return "\(goal.goalType.displayName) · \(paceName)" }
         return goal.goalType.displayName
     }
 
@@ -108,7 +215,7 @@ struct SettingsView: View {
             defer { isSigningOut = false }
             do {
                 try await authManager.signOut()
-                // RootView re-routes to AuthView via AuthManager state change.
+                // AuthManager clears session → RootView re-routes to AuthView.
             } catch {
                 signOutError = error.localizedDescription
             }

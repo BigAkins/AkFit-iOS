@@ -62,11 +62,13 @@ struct EditGoalView: View {
         NavigationStack {
             Form {
                 // ── Live target preview ──────────────────────────────────
+                // Updates as the user changes any input — they see exactly
+                // what their daily targets will be before hitting Save.
                 if let out = calculated {
                     Section {
                         targetPreview(out)
                     } header: {
-                        Text("New targets")
+                        Text("Your new daily targets")
                     }
                 }
 
