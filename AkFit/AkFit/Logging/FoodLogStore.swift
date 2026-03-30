@@ -3,15 +3,15 @@ import Supabase
 
 /// Owns all in-session food log state and the Supabase read/write operations.
 ///
-/// Injected into the SwiftUI environment from `AkFitApp`. Both `DashboardView`
-/// (reads `todayLogs` for consumed totals) and `FoodDetailView` (calls `insert`)
-/// share this single instance — no extra network round-trip needed after logging.
+/// Injected into the SwiftUI environment from `AkFitApp`. Multiple views share
+/// this single instance — no extra network round-trips needed after mutations.
 ///
 /// ## Data lifecycle
 /// 1. `DashboardView` calls `refreshToday(userId:)` via `.task` on first appear.
-/// 2. `FoodDetailView` calls `insert(food:quantity:for:)` on "Log food" tap.
-/// 3. On successful insert, the confirmed row is appended to `todayLogs`
-///    immediately — the dashboard re-renders via Observation without a refetch.
+/// 2. `SearchView` calls `refreshRecents(userId:)` via `.task` on first appear.
+/// 3. `ProgressTabView` calls `refreshWeek(userId:)` via `.task` on first appear.
+/// 4. `FoodDetailView` calls `insert(food:quantity:for:)` on "Log food" tap.
+/// 5. On successful insert, all three derived lists update in memory immediately.
 @Observable
 final class FoodLogStore {
 
@@ -25,17 +25,27 @@ final class FoodLogStore {
     /// Populated by `refreshRecents`; updated in memory after each `insert`.
     private(set) var recentFoods: [FoodLog] = []
 
+    /// All food log entries for the past 7 calendar days (today + 6 prior days).
+    /// Ordered by `logged_at` ascending. Used by `ProgressTabView` to build
+    /// `DayProgress` totals; updated in memory after each `insert` and `delete`.
+    private(set) var weekLogs: [FoodLog] = []
+
     /// True while `refreshToday` is in flight. Use for subtle loading states.
     private(set) var isRefreshing: Bool = false
 
     // MARK: - Init
 
     /// Default initializer — starts with empty state.
-    /// Also used as the preview initializer: pass `previewLogs` and/or
-    /// `previewRecents` in `#Preview` blocks to seed state without a network call.
-    init(previewLogs: [FoodLog] = [], previewRecents: [FoodLog] = []) {
+    /// Also used as the preview initializer: pass any combination of seeding
+    /// parameters in `#Preview` blocks to populate state without a network call.
+    init(
+        previewLogs:     [FoodLog] = [],
+        previewRecents:  [FoodLog] = [],
+        previewWeekLogs: [FoodLog] = []
+    ) {
         self.todayLogs   = previewLogs
         self.recentFoods = previewRecents
+        self.weekLogs    = previewWeekLogs
     }
 
     // MARK: - Fetch
@@ -99,11 +109,33 @@ final class FoodLogStore {
         }
     }
 
+    // MARK: - Fetch week
+
+    /// Fetches all food log entries for `userId` in the past 7 calendar days
+    /// (today + the 6 preceding days, in device-local time). Replaces `weekLogs`.
+    ///
+    /// Errors are swallowed — `weekLogs` stays as-is (empty or stale).
+    func refreshWeek(userId: UUID) async {
+        do {
+            let logs: [FoodLog] = try await SupabaseClientProvider.shared
+                .from("food_logs")
+                .select()
+                .eq("user_id", value: userId.uuidString)
+                .gte("logged_at", value: weekStartISO())
+                .order("logged_at", ascending: true)
+                .execute()
+                .value
+            weekLogs = logs
+        } catch {
+            // Non-fatal: ProgressTabView shows whatever data is available.
+        }
+    }
+
     // MARK: - Insert
 
     /// Persists a food log entry to Supabase, then appends the confirmed row to
-    /// `todayLogs` and prepends it to `recentFoods`. Both lists update immediately
-    /// so the dashboard and search screen re-render without an extra network round-trip.
+    /// `todayLogs`, `weekLogs`, and prepends it to `recentFoods`. All three lists
+    /// update immediately so views re-render without an extra network round-trip.
     ///
     /// Scaled nutrition values are computed here so the DB row is self-contained:
     /// the dashboard reads them with a plain `SUM`, no further math required.
@@ -129,6 +161,7 @@ final class FoodLogStore {
             .value
 
         todayLogs.append(saved)
+        weekLogs.append(saved)
 
         // Bubble the newly logged food to the top of recents, keeping the list
         // deduplicated and capped at 8 so the search screen stays current.
@@ -141,8 +174,9 @@ final class FoodLogStore {
 
     // MARK: - Delete
 
-    /// Deletes a food log entry from Supabase, then removes it from `todayLogs`.
-    /// Throws on network or server errors so the caller can surface feedback.
+    /// Deletes a food log entry from Supabase, then removes it from `todayLogs`
+    /// and `weekLogs`. Throws on network or server errors so the caller can surface
+    /// feedback.
     func delete(logId: UUID) async throws {
         try await SupabaseClientProvider.shared
             .from("food_logs")
@@ -150,6 +184,7 @@ final class FoodLogStore {
             .eq("id", value: logId.uuidString)
             .execute()
         todayLogs.removeAll { $0.id == logId }
+        weekLogs.removeAll  { $0.id == logId }
     }
 
     // MARK: - Private helpers
@@ -164,6 +199,17 @@ final class FoodLogStore {
         let fmt      = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return (fmt.string(from: start), fmt.string(from: end))
+    }
+
+    /// Returns an ISO 8601 string for midnight 6 days ago (device local time),
+    /// i.e. the start of the 7-day window used by `refreshWeek`.
+    private func weekStartISO() -> String {
+        let calendar  = Calendar.current
+        let today     = calendar.startOfDay(for: Date())
+        let weekStart = calendar.date(byAdding: .day, value: -6, to: today)!
+        let fmt       = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fmt.string(from: weekStart)
     }
 }
 
