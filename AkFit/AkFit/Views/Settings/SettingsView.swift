@@ -11,8 +11,9 @@ import SwiftUI
 /// - `authManager.profile.createdAt` — member-since year
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
-    @Environment(AuthManager.self)      private var authManager
-    @Environment(HealthKitService.self) private var healthKit
+    @Environment(AuthManager.self)         private var authManager
+    @Environment(HealthKitService.self)    private var healthKit
+    @Environment(NotificationService.self) private var notifications
 
     @State private var showEditGoal          = false
     @State private var isSigningOut          = false
@@ -28,6 +29,7 @@ struct SettingsView: View {
                 if authManager.goal != nil {
                     targetsSection
                 }
+                remindersSection
                 if healthKit.isAvailable {
                     healthSection
                 }
@@ -35,6 +37,7 @@ struct SettingsView: View {
             }
             .onAppear {
                 healthKit.checkAuthorization()
+                Task { await notifications.checkAuthorization() }
             }
             .navigationTitle("Settings")
             .sheet(isPresented: $showEditGoal) {
@@ -154,6 +157,72 @@ struct SettingsView: View {
             }
         } header: {
             Text("Daily targets")
+        }
+    }
+
+    // MARK: - Reminders section
+
+    private var remindersSection: some View {
+        Section {
+            // Enable/disable toggle
+            Toggle(isOn: Binding(
+                get: { notifications.isEnabled },
+                set: { notifications.setEnabled($0) }
+            )) {
+                Text("Daily Reminder")
+            }
+
+            // Time picker and permission state — only relevant when enabled.
+            if notifications.isEnabled {
+                switch notifications.authStatus {
+
+                case .authorized:
+                    // Time picker — compact style shows as a tappable time button.
+                    DatePicker(
+                        "Reminder time",
+                        selection: Binding(
+                            get: { notifications.reminderTime },
+                            set: { notifications.updateReminderTime($0) }
+                        ),
+                        displayedComponents: .hourAndMinute
+                    )
+
+                case .denied:
+                    // Notification permission was denied — guide user to fix it.
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Notifications are disabled")
+                                .foregroundStyle(.primary)
+                            Text("Enable in Settings → AkFit")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Open Settings") {
+                            if let url = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(url)
+                            }
+                        }
+                        .font(.subheadline)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                case .notDetermined:
+                    // Brief transitional state while the permission prompt is showing.
+                    EmptyView()
+                }
+            }
+        } header: {
+            Text("Reminders")
+        } footer: {
+            if notifications.isEnabled && notifications.authStatus == .authorized {
+                Text("Reminded once per day. Logging food cancels that day's reminder.")
+                    .foregroundStyle(.secondary)
+            } else if notifications.isEnabled && notifications.authStatus == .denied {
+                Text("Allow notifications in Settings to activate daily reminders.")
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -298,10 +367,12 @@ struct SettingsView: View {
     return SettingsView()
         .environment(auth)
         .environment(HealthKitService())
+        .environment(NotificationService())
 }
 
 #Preview("Signed in, no goal") {
     SettingsView()
         .environment(AuthManager(previewMode: true))
         .environment(HealthKitService())
+        .environment(NotificationService())
 }

@@ -47,4 +47,5 @@ struct MainTabView: View {
         .environment(BodyweightStore())
         .environment(AppRouter())
         .environment(HealthKitService())
+        .environment(NotificationService())
 }

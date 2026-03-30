@@ -38,11 +38,12 @@ struct SearchView: View {
     @State private var bannerEntry: FoodLog? = nil
     @State private var autoDismissTask: Task<Void, Never>? = nil
 
-    @Environment(FoodLogStore.self)      private var logStore
-    @Environment(FavoriteFoodStore.self) private var favStore
-    @Environment(AuthManager.self)       private var authManager
-    @Environment(HealthKitService.self)  private var healthKit
-    @Environment(AppRouter.self)         private var router
+    @Environment(FoodLogStore.self)         private var logStore
+    @Environment(FavoriteFoodStore.self)    private var favStore
+    @Environment(AuthManager.self)          private var authManager
+    @Environment(HealthKitService.self)     private var healthKit
+    @Environment(NotificationService.self)  private var notifications
+    @Environment(AppRouter.self)            private var router
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -294,6 +295,7 @@ struct SearchView: View {
             if let entry = logStore.lastLoggedEntry {
                 await healthKit.exportFoodLog(entry)
             }
+            notifications.cancelTodayReminder()
         }
     }
 
@@ -314,6 +316,7 @@ struct SearchView: View {
             if let entry = logStore.lastLoggedEntry {
                 await healthKit.exportFoodLog(entry)
             }
+            notifications.cancelTodayReminder()
         }
     }
 
@@ -576,6 +579,7 @@ private extension SearchView {
         .environment(FavoriteFoodStore())
         .environment(AuthManager(previewMode: true))
         .environment(HealthKitService())
+        .environment(NotificationService())
         .environment(AppRouter())
 }
 
@@ -585,5 +589,6 @@ private extension SearchView {
         .environment(FavoriteFoodStore())
         .environment(SearchView.previewAuth)
         .environment(HealthKitService())
+        .environment(NotificationService())
         .environment(AppRouter())
 }

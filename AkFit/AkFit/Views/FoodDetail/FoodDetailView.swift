@@ -28,11 +28,12 @@ struct FoodDetailView: View {
         self._quantity = State(initialValue: initialQuantity)
     }
 
-    @Environment(FoodLogStore.self)      private var logStore
-    @Environment(FavoriteFoodStore.self) private var favStore
-    @Environment(AuthManager.self)       private var authManager
-    @Environment(HealthKitService.self)  private var healthKit
-    @Environment(\.dismiss)              private var dismiss
+    @Environment(FoodLogStore.self)         private var logStore
+    @Environment(FavoriteFoodStore.self)    private var favStore
+    @Environment(AuthManager.self)          private var authManager
+    @Environment(HealthKitService.self)     private var healthKit
+    @Environment(NotificationService.self)  private var notifications
+    @Environment(\.dismiss)                 private var dismiss
 
     // MARK: - Scaled nutrition
 
@@ -306,6 +307,7 @@ struct FoodDetailView: View {
                         if let entry = logStore.lastLoggedEntry {
                             Task { await healthKit.exportFoodLog(entry) }
                         }
+                        notifications.cancelTodayReminder()
                         dismiss()
                     } catch {
                         logError = "Couldn't save. Please try again."
@@ -475,6 +477,7 @@ private extension Double {
     .environment(FavoriteFoodStore())
     .environment(auth)
     .environment(HealthKitService())
+    .environment(NotificationService())
 }
 
 #Preview("Default serving") {
@@ -495,6 +498,7 @@ private extension Double {
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
+    .environment(NotificationService())
 }
 
 #Preview("High fat food") {
@@ -515,6 +519,7 @@ private extension Double {
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
+    .environment(NotificationService())
 }
 
 #Preview("Packaged / no gram weight") {
@@ -535,4 +540,5 @@ private extension Double {
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
+    .environment(NotificationService())
 }
