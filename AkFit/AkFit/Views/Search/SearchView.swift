@@ -5,6 +5,11 @@ import SwiftUI
 /// Reachable directly via the Search tab or by tapping the dashboard FAB
 /// (which sets `AppRouter.selectedTab = .search`).
 ///
+/// **Daily summary:** a compact card at the top of the empty state and
+/// results list shows remaining calories + P/C/F, computed from
+/// `authManager.goal` and `logStore.todayLogs` (both already in memory).
+/// Updates live as the user logs foods without any extra network calls.
+///
 /// **Empty state:** shows a "Recent" section (last 8 distinct foods logged,
 /// newest first) above a "Suggestions" list pulled from Supabase
 /// `generic_foods`. Both are fetched concurrently on first appear.
@@ -113,12 +118,45 @@ struct SearchView: View {
         }
     }
 
+    // MARK: - Daily summary
+
+    /// Computes today's remaining calories and macros from in-memory data.
+    /// Returns `nil` when no active goal is set (pre-onboarding users).
+    /// Same logic as `DashboardView` — both read from the same shared stores.
+    private var daySummary: DaySummary? {
+        guard let goal = authManager.goal else { return nil }
+        var s = DaySummary.from(goal: goal)
+        for log in logStore.todayLogs {
+            s.consumedCalories += log.calories
+            s.consumedProteinG += Int(log.proteinG.rounded())
+            s.consumedCarbsG   += Int(log.carbsG.rounded())
+            s.consumedFatG     += Int(log.fatG.rounded())
+        }
+        return s
+    }
+
+    /// A List-compatible section that renders `SearchDaySummaryCard` if the
+    /// day summary is available. Inserted at the top of `promptView` and
+    /// `resultsList` so the remaining budget is always visible.
+    @ViewBuilder
+    private var summarySection: some View {
+        if let summary = daySummary {
+            Section {
+                SearchDaySummaryCard(summary: summary)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+            }
+        }
+    }
+
     // MARK: - View states
 
     /// Shown when the search field is empty.
     /// "Recent" section appears above "Suggestions" when the user has prior logs.
     private var promptView: some View {
         List {
+            summarySection
             if !favStore.favorites.isEmpty {
                 Section("Favorites") {
                     ForEach(favStore.favorites) { fav in
@@ -175,6 +213,7 @@ struct SearchView: View {
 
     private var resultsList: some View {
         List {
+            summarySection
             Section("\(results.count) result\(results.count == 1 ? "" : "s")") {
                 ForEach(results) { food in
                     foodLink(food)
@@ -344,6 +383,105 @@ private struct MacroLine: View {
     }
 }
 
+// MARK: - Daily summary card
+
+/// Compact remaining-budget card shown at the top of the Search screen.
+///
+/// Left side: calories remaining (prominent). Right side: P / C / F
+/// remaining in grams. All values animate live as food is logged.
+/// The card is read-only — no tap action.
+private struct SearchDaySummaryCard: View {
+    let summary: DaySummary
+
+    var body: some View {
+        HStack(alignment: .center) {
+            // Calories remaining — the primary decision signal
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(summary.remainingCalories)")
+                    .font(.title3.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: summary.remainingCalories)
+                Text("kcal left")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            // Macro remaining chips — P / C / F
+            HStack(spacing: 10) {
+                macroChip("P", value: summary.remainingProteinG, color: .red)
+                macroChip("C", value: summary.remainingCarbsG,   color: .orange)
+                macroChip("F", value: summary.remainingFatG,     color: .blue)
+            }
+            .font(.caption)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func macroChip(_ label: String, value: Int, color: Color) -> some View {
+        HStack(spacing: 2) {
+            Text(label)
+                .fontWeight(.semibold)
+                .foregroundStyle(color)
+            Text("\(value)g")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: value)
+        }
+    }
+}
+
+// MARK: - Preview helpers
+
+private extension SearchView {
+    /// An `AuthManager` with a fat-loss goal for use in `#Preview` blocks.
+    static var previewAuth: AuthManager {
+        let uid  = UUID()
+        let auth = AuthManager(previewMode: true)
+        auth.markOnboarded(
+            goal: UserGoal(
+                id: UUID(), userId: uid, goalType: .fatLoss,
+                targetCalories: 2100, targetProteinG: 165,
+                targetCarbsG: 220,    targetFatG: 65,
+                heightCm: nil, weightKg: nil, age: nil, sex: nil,
+                activityLevel: nil, pace: nil,
+                isActive: true, createdAt: Date(), updatedAt: Date()
+            ),
+            profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+        )
+        return auth
+    }
+
+    /// A `FoodLogStore` pre-seeded with today's logs (522 kcal consumed)
+    /// and recents for the "With recents + summary" preview.
+    static var previewLogStore: FoodLogStore {
+        let uid = UUID()
+        let todayLogs: [FoodLog] = [
+            FoodLog(id: UUID(), userId: uid, foodName: "Oats, rolled",
+                    servingLabel: "40g (half cup)", quantity: 1.0,
+                    calories: 154, proteinG: 5.4, carbsG: 26.0, fatG: 2.8,
+                    loggedAt: Date(), createdAt: Date()),
+            FoodLog(id: UUID(), userId: uid, foodName: "Whey Protein",
+                    servingLabel: "1 scoop (30g)", quantity: 1.0,
+                    calories: 120, proteinG: 24.0, carbsG: 3.0, fatG: 1.5,
+                    loggedAt: Date(), createdAt: Date()),
+            FoodLog(id: UUID(), userId: uid, foodName: "Chicken Breast, cooked",
+                    servingLabel: "100g", quantity: 1.5,
+                    calories: 248, proteinG: 46.5, carbsG: 0.0, fatG: 5.4,
+                    loggedAt: Date(), createdAt: Date()),
+        ]
+        let recents: [FoodLog] = todayLogs
+        return FoodLogStore(previewLogs: todayLogs, previewRecents: recents)
+    }
+}
+
 // MARK: - Preview
 
 #Preview("No recents") {
@@ -354,25 +492,10 @@ private struct MacroLine: View {
         .environment(AppRouter())
 }
 
-#Preview("With recents") {
-    let uid = UUID()
-    let recents: [FoodLog] = [
-        FoodLog(id: UUID(), userId: uid, foodName: "Chicken Breast, cooked",
-                servingLabel: "100g", quantity: 1.5,
-                calories: 248, proteinG: 46.5, carbsG: 0, fatG: 5.4,
-                loggedAt: Date(), createdAt: Date()),
-        FoodLog(id: UUID(), userId: uid, foodName: "Oats, rolled",
-                servingLabel: "40g (½ cup)", quantity: 1.0,
-                calories: 154, proteinG: 5.4, carbsG: 26, fatG: 2.8,
-                loggedAt: Date(), createdAt: Date()),
-        FoodLog(id: UUID(), userId: uid, foodName: "Whey Protein",
-                servingLabel: "1 scoop (30g)", quantity: 1.0,
-                calories: 120, proteinG: 24, carbsG: 3.0, fatG: 1.5,
-                loggedAt: Date(), createdAt: Date()),
-    ]
+#Preview("With recents + summary") {
     SearchView()
-        .environment(FoodLogStore(previewRecents: recents))
+        .environment(SearchView.previewLogStore)
         .environment(FavoriteFoodStore())
-        .environment(AuthManager(previewMode: true))
+        .environment(SearchView.previewAuth)
         .environment(AppRouter())
 }
