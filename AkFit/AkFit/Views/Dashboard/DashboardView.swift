@@ -7,6 +7,11 @@ import SwiftUI
 /// - Consumed values are computed from `FoodLogStore.todayLogs`.
 /// - `FoodLogStore.refreshToday` is called once on first appear via `.task`.
 ///
+/// **Swipe-to-delete:** Food log rows live as direct children of a `List` Section.
+/// SwiftUI's `.swipeActions` requires List rows — a `ScrollView + VStack` structure
+/// silently discards swipe actions. The outer `List` replaces the previous
+/// `ScrollView + VStack` to make this work reliably.
+///
 /// **FAB action:** tapping the floating + button sets `AppRouter.selectedTab = .search`,
 /// switching the user directly into the Search tab to start logging.
 struct DashboardView: View {
@@ -28,25 +33,74 @@ struct DashboardView: View {
         return s
     }
 
+    /// Running calorie total shown in the food log section header.
+    private var totalLoggedCalories: Int {
+        logStore.todayLogs.reduce(0) { $0 + $1.calories }
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             NavigationStack {
-                ScrollView {
+                List {
                     if let summary {
-                        VStack(spacing: 16) {
+                        // ── Summary cards ──────────────────────────────────────────
+                        // listRowBackground(Color(UIColor.systemBackground)) makes the
+                        // insetGrouped section container visually invisible — the cards
+                        // draw their own gray surfaces on top.
+                        Section {
                             CalorieSummaryCard(summary: summary)
+                                .listRowBackground(Color(UIColor.systemBackground))
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
+
                             MacroRow(summary: summary)
-                            FoodLogSection(logs: logStore.todayLogs, logStore: logStore)
+                                .listRowBackground(Color(UIColor.systemBackground))
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-                        .padding(.bottom, 96) // clearance above tab bar + FAB
+                        .listSectionSeparator(.hidden)
+
+                        // ── Food log ───────────────────────────────────────────────
+                        // Rows are direct List Section children, so .swipeActions
+                        // works reliably. insetGrouped clips the Section to a rounded
+                        // card automatically — no manual clipShape needed.
+                        Section {
+                            if logStore.todayLogs.isEmpty {
+                                foodLogEmptyState
+                                    .listRowBackground(Color(UIColor.systemBackground))
+                                    .listRowSeparator(.hidden)
+                            } else {
+                                ForEach(logStore.todayLogs) { log in
+                                    FoodLogRow(log: log)
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                            Button(role: .destructive) {
+                                                Task { try? await logStore.delete(logId: log.id) }
+                                            } label: {
+                                                Label("Delete", systemImage: "trash")
+                                            }
+                                        }
+                                        .listRowBackground(Color(.systemGray6))
+                                        // Zero row insets: the row's own .padding(.horizontal, 16)
+                                        // provides content padding; the section's inset margin
+                                        // provides the gap from screen edges.
+                                        .listRowInsets(EdgeInsets())
+                                }
+                            }
+                        } header: {
+                            foodLogHeader
+                        }
+                        .listSectionSeparator(.hidden)
                     }
                 }
+                .listStyle(.insetGrouped)
+                // Remove the default grouped background so the screen stays white/dark
+                // and the summary cards' own gray surfaces are the only decoration.
+                .scrollContentBackground(.hidden)
+                .background(Color(UIColor.systemBackground))
                 .navigationTitle("Today")
+                // Bottom inset keeps the last row visible above the tab bar + FAB.
+                .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 80) }
                 .task {
-                    // Fetch today's logs once on first appear.
-                    // After logging, FoodLogStore appends in memory — no re-fetch needed.
                     if let userId = authManager.currentUserId {
                         await logStore.refreshToday(userId: userId)
                     }
@@ -68,6 +122,49 @@ struct DashboardView: View {
             .padding(.trailing, 24)
             .padding(.bottom, 16)
         }
+    }
+
+    // MARK: - Food log section header
+
+    private var foodLogHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Today's food")
+                .font(.headline)
+                .foregroundStyle(.primary)
+            Spacer()
+            if !logStore.todayLogs.isEmpty {
+                Text("\(totalLoggedCalories) kcal")
+                    .font(.subheadline.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: totalLoggedCalories)
+            }
+        }
+        .textCase(nil)  // prevent the default List section header uppercase
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Food log empty state
+
+    private var foodLogEmptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "fork.knife")
+                .font(.system(size: 28))
+                .foregroundStyle(Color(.systemGray3))
+
+            Text("Nothing logged yet")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Text("Tap + to log your first meal")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 }
 
@@ -200,84 +297,6 @@ private struct MacroCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-}
-
-// MARK: - Food log section
-
-private struct FoodLogSection: View {
-    let logs: [FoodLog]
-    let logStore: FoodLogStore
-
-    /// Running calorie total for the day — shown in the section header
-    /// so users can check consumed intake without reading individual rows.
-    private var totalCalories: Int {
-        logs.reduce(0) { $0 + $1.calories }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Today's food")
-                    .font(.headline)
-                Spacer()
-                if !logs.isEmpty {
-                    Text("\(totalCalories) kcal")
-                        .font(.subheadline.weight(.medium))
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .contentTransition(.numericText())
-                        .animation(.snappy, value: totalCalories)
-                }
-            }
-
-            if logs.isEmpty {
-                emptyState
-            } else {
-                logList
-            }
-        }
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "fork.knife")
-                .font(.system(size: 28))
-                .foregroundStyle(Color(.systemGray3))
-
-            Text("Nothing logged yet")
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-
-            Text("Tap + to log your first meal")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 40)
-        .background(Color(.systemGray6))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-
-    private var logList: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(logs.enumerated()), id: \.element.id) { index, log in
-                FoodLogRow(log: log)
-                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                        Button(role: .destructive) {
-                            Task { try? await logStore.delete(logId: log.id) }
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                if index < logs.count - 1 {
-                    Divider()
-                        .padding(.leading, 16)
-                }
-            }
-        }
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 14))
     }
@@ -421,7 +440,7 @@ private extension DashboardView {
                 foodName: "Oats, rolled", servingLabel: "40g (½ cup)",
                 quantity: 1.0,
                 calories: 154, proteinG: 5.4, carbsG: 26.0, fatG: 2.8,
-                loggedAt: now.addingTimeInterval(-5 * 3600), // 5 hours ago
+                loggedAt: now.addingTimeInterval(-5 * 3600),
                 createdAt: now.addingTimeInterval(-5 * 3600)
             ),
             FoodLog(
@@ -429,7 +448,7 @@ private extension DashboardView {
                 foodName: "Chicken Breast, cooked", servingLabel: "100g",
                 quantity: 1.5,
                 calories: 248, proteinG: 46.5, carbsG: 0,   fatG: 5.4,
-                loggedAt: now.addingTimeInterval(-3 * 3600), // 3 hours ago
+                loggedAt: now.addingTimeInterval(-3 * 3600),
                 createdAt: now.addingTimeInterval(-3 * 3600)
             ),
             FoodLog(
@@ -437,7 +456,7 @@ private extension DashboardView {
                 foodName: "Whey Protein", servingLabel: "1 scoop (30g)",
                 quantity: 1.0,
                 calories: 120, proteinG: 24.0, carbsG: 3.0, fatG: 1.5,
-                loggedAt: now.addingTimeInterval(-1 * 3600), // 1 hour ago
+                loggedAt: now.addingTimeInterval(-1 * 3600),
                 createdAt: now.addingTimeInterval(-1 * 3600)
             ),
         ]
