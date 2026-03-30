@@ -167,7 +167,7 @@ struct SearchView: View {
             if !logStore.recentFoods.isEmpty {
                 Section("Recent") {
                     ForEach(logStore.recentFoods) { log in
-                        foodLink(log.asFoodItem())
+                        recentFoodLink(log)
                     }
                 }
             }
@@ -231,6 +231,37 @@ struct SearchView: View {
             FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
         } label: {
             FoodRow(food: food)
+        }
+    }
+
+    /// A Recent-specific row that wraps `foodLink` with a leading swipe action
+    /// for one-gesture quick-logging at the food's previously used quantity.
+    ///
+    /// Tap → `FoodDetailView` (unchanged). Swipe right → `quickLog` fires.
+    @ViewBuilder
+    private func recentFoodLink(_ log: FoodLog) -> some View {
+        foodLink(log.asFoodItem())
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button {
+                    quickLog(log)
+                } label: {
+                    Label("Log", systemImage: "plus.circle.fill")
+                }
+                .tint(.green)
+            }
+    }
+
+    /// Logs `log` at its stored quantity without opening `FoodDetailView`.
+    /// The existing `onChange(of: logStore.lastLoggedEntry?.id)` handler
+    /// fires the banner + Undo automatically — no extra wiring needed here.
+    private func quickLog(_ log: FoodLog) {
+        guard let userId = authManager.currentUserId else { return }
+        Task {
+            try? await logStore.insert(
+                food:     log.asFoodItem(),
+                quantity: log.quantity,
+                for:      userId
+            )
         }
     }
 
