@@ -160,7 +160,7 @@ struct SearchView: View {
             if !favStore.favorites.isEmpty {
                 Section("Favorites") {
                     ForEach(favStore.favorites) { fav in
-                        foodLink(fav.asFoodItem())
+                        favoriteFoodLink(fav)
                     }
                 }
             }
@@ -234,6 +234,24 @@ struct SearchView: View {
         }
     }
 
+    /// A Favorite-specific row that wraps `foodLink` with a leading swipe action.
+    /// Quantity uses `logStore.lastQuantity` when the food has been logged before;
+    /// falls back to 1.0 for foods with no log history.
+    ///
+    /// Tap → `FoodDetailView` (unchanged). Swipe right → `quickLog` fires.
+    @ViewBuilder
+    private func favoriteFoodLink(_ fav: FavoriteFood) -> some View {
+        foodLink(fav.asFoodItem())
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                Button {
+                    quickLog(fav)
+                } label: {
+                    Label("Log", systemImage: "plus.circle.fill")
+                }
+                .tint(.green)
+            }
+    }
+
     /// A Recent-specific row that wraps `foodLink` with a leading swipe action
     /// for one-gesture quick-logging at the food's previously used quantity.
     ///
@@ -249,6 +267,18 @@ struct SearchView: View {
                 }
                 .tint(.green)
             }
+    }
+
+    /// Logs a favorite at the last-used quantity for that food, or 1.0 if no
+    /// history exists. Favorites store per-serving nutrition — `lastQuantity`
+    /// supplies the repeat-use multiplier from `recentFoods`.
+    private func quickLog(_ fav: FavoriteFood) {
+        guard let userId = authManager.currentUserId else { return }
+        let food = fav.asFoodItem()
+        let qty  = logStore.lastQuantity(for: food) ?? 1.0
+        Task {
+            try? await logStore.insert(food: food, quantity: qty, for: userId)
+        }
     }
 
     /// Logs `log` at its stored quantity without opening `FoodDetailView`.

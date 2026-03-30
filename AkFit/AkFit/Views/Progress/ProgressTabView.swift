@@ -93,9 +93,17 @@ struct ProgressTabView: View {
             }
             .frame(height: 160)
             .chartYScale(domain: 0...yMax)
+            .animation(.easeOut(duration: 0.45), value: weekProgress.map(\.totalCalories))
+            .animation(.easeInOut(duration: 0.2), value: selectedDate)
             .chartXAxis {
-                AxisMarks(values: weekProgress.map(\.date)) { _ in
-                    AxisValueLabel(format: .dateTime.weekday(.abbreviated))
+                AxisMarks(values: weekProgress.map(\.date)) { value in
+                    if let date = value.as(Date.self) {
+                        AxisValueLabel(
+                            Calendar.current.isDateInToday(date)
+                                ? "Today"
+                                : date.formatted(.dateTime.weekday(.abbreviated))
+                        )
+                    }
                 }
             }
             .chartYAxis {
@@ -119,7 +127,9 @@ struct ProgressTabView: View {
     }
 
     private func barColor(for day: DayProgress) -> Color {
-        day.date == selectedDate ? .primary : Color(.systemGray4)
+        if day.date == selectedDate                      { return .primary }
+        if Calendar.current.isDateInToday(day.date)     { return Color(.systemGray2) }
+        return Color(.systemGray4)
     }
 
     /// Maps a tap location in the chart overlay to the nearest week day.
