@@ -19,6 +19,9 @@ struct SearchView: View {
     @State private var query: String = ""
     @State private var results: [FoodItem] = []
     @State private var searchTask: Task<Void, Never>? = nil
+    @State private var showScanner = false
+    /// Set when a barcode scan resolves to a food item. Triggers navigation to `FoodDetailView`.
+    @State private var scannedFood: FoodItem? = nil
 
     @Environment(FoodLogStore.self) private var logStore
     @Environment(AuthManager.self)  private var authManager
@@ -52,6 +55,24 @@ struct SearchView: View {
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search food..."
             )
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        showScanner = true
+                    } label: {
+                        Image(systemName: "barcode.viewfinder")
+                    }
+                    .accessibilityLabel("Scan barcode")
+                }
+            }
+            .navigationDestination(item: $scannedFood) { food in
+                FoodDetailView(food: food)
+            }
+            .sheet(isPresented: $showScanner) {
+                BarcodeScannerView { food in
+                    scannedFood = food
+                }
+            }
             .onChange(of: query) { performSearch() }
             .task {
                 // Fetch recent foods when the Search tab first appears.
