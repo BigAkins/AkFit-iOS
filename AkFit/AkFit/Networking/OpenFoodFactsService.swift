@@ -132,7 +132,7 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
     /// **Energy fallback:**
     /// When calorie data is entirely absent, estimates via Atwater factors
     /// (protein × 4 + carbs × 4 + fat × 9).
-    static func toFoodItem(_ product: OFFProduct) -> FoodItem? {
+    private static func toFoodItem(_ product: OFFProduct) -> FoodItem? {
         // Require a non-empty name — prefer the English variant when available.
         let name: String
         if let en = product.productNameEn,
