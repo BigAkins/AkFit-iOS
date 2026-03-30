@@ -19,6 +19,8 @@ struct DashboardView: View {
     @Environment(FoodLogStore.self) private var logStore
     @Environment(AppRouter.self)    private var router
 
+    @State private var showDeleteError = false
+
     /// Targets from the active goal + consumed totals from today's log entries.
     /// Computed synchronously — no async work in the view.
     private var summary: DaySummary? {
@@ -95,6 +97,13 @@ struct DashboardView: View {
                                 .listRowInsets(EdgeInsets())
                             } header: { foodLogHeader }
                             .listSectionSeparator(.hidden)
+                        } else if logStore.refreshFailed {
+                            Section {
+                                foodLogErrorState
+                                    .listRowBackground(Color(UIColor.systemBackground))
+                                    .listRowSeparator(.hidden)
+                            } header: { foodLogHeader }
+                            .listSectionSeparator(.hidden)
                         } else if logStore.todayLogs.isEmpty {
                             Section {
                                 foodLogEmptyState
@@ -109,7 +118,13 @@ struct DashboardView: View {
                                         FoodLogRow(log: log)
                                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                                 Button(role: .destructive) {
-                                                    Task { try? await logStore.delete(logId: log.id) }
+                                                    Task {
+                                                        do {
+                                                            try await logStore.delete(logId: log.id)
+                                                        } catch {
+                                                            showDeleteError = true
+                                                        }
+                                                    }
                                                 } label: {
                                                     Label("Delete", systemImage: "trash")
                                                 }
@@ -137,6 +152,11 @@ struct DashboardView: View {
                     if let userId = authManager.currentUserId {
                         await logStore.refreshToday(userId: userId)
                     }
+                }
+                .alert("Couldn't remove entry", isPresented: $showDeleteError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("Please check your connection and try again.")
                 }
             }
 
@@ -201,6 +221,34 @@ struct DashboardView: View {
             Text("Tap + to log your first meal")
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 40)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    // MARK: - Food log error state
+
+    /// Shown when `refreshToday` fails so users understand nothing is wrong
+    /// with their data — it's a connectivity issue, not an empty log.
+    private var foodLogErrorState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "wifi.slash")
+                .font(.system(size: 28))
+                .foregroundStyle(Color(.systemGray3))
+
+            Text("Couldn't load today's log")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+
+            Button("Try again") {
+                if let userId = authManager.currentUserId {
+                    Task { await logStore.refreshToday(userId: userId) }
+                }
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

@@ -33,6 +33,11 @@ final class FoodLogStore {
     /// True while `refreshToday` is in flight. Use for subtle loading states.
     private(set) var isRefreshing: Bool = false
 
+    /// Set to `true` when `refreshToday` fails (network error, Supabase error, etc.).
+    /// Cleared on the next successful refresh. `DashboardView` reads this to show
+    /// an error state with a retry button instead of the misleading empty state.
+    private(set) var refreshFailed: Bool = false
+
     /// Set to the saved `FoodLog` immediately after a successful `insert`.
     /// Consumed by `SearchView` to show the post-log confirmation banner.
     /// Cleared by `clearLastLog()` once the banner has been displayed.
@@ -86,6 +91,7 @@ final class FoodLogStore {
     /// (empty on first load, stale on retry failure) rather than crashing or alerting.
     func refreshToday(userId: UUID) async {
         isRefreshing = true
+        refreshFailed = false
         defer { isRefreshing = false }
 
         let (startISO, endISO) = todayRange()
@@ -102,7 +108,9 @@ final class FoodLogStore {
                 .value
             todayLogs = logs
         } catch {
-            // Non-fatal. Dashboard shows stale/empty data rather than an error state.
+            // Surfaces `refreshFailed` so DashboardView can show a retry state
+            // instead of the misleading "Nothing logged yet" empty state.
+            refreshFailed = true
         }
     }
 

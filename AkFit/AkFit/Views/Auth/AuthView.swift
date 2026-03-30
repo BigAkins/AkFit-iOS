@@ -9,6 +9,9 @@ struct AuthView: View {
     @State private var isSubmitting: Bool = false
     @State private var errorMessage: String? = nil
     @State private var awaitingConfirmation: Bool = false
+    /// Message shown in the password-reset confirmation alert. `nil` hides the alert.
+    @State private var resetAlertMessage: String? = nil
+    @State private var isResettingPassword: Bool = false
 
     enum Mode: CaseIterable {
         case signIn, signUp
@@ -67,8 +70,36 @@ struct AuthView: View {
                     keyboardType: .default,
                     isSecure: true
                 )
+
+                // Inline hint — only shown when the user has typed something
+                // too short. Avoids a confusing disabled-button state with no explanation.
+                if !password.isEmpty && password.count < 6 {
+                    Text("Minimum 6 characters")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 4)
+                        .transition(.opacity)
+                }
             }
             .padding(.horizontal, 24)
+            .animation(.easeInOut(duration: 0.15), value: password.count < 6 && !password.isEmpty)
+
+            // Forgot password — sign-in mode only. Shows an alert after the reset
+            // email fires so the user knows to check their inbox.
+            if mode == .signIn {
+                HStack {
+                    Spacer()
+                    Button("Forgot password?") {
+                        triggerPasswordReset()
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .disabled(isResettingPassword)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+            }
 
             // Error message
             if let errorMessage {
@@ -104,6 +135,18 @@ struct AuthView: View {
             .disabled(isSubmitting || !isFormValid)
         }
         .background(Color(UIColor.systemBackground))
+        // Password-reset confirmation / error alert.
+        .alert(
+            "Password Reset",
+            isPresented: Binding(
+                get: { resetAlertMessage != nil },
+                set: { if !$0 { resetAlertMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(resetAlertMessage ?? "")
+        }
     }
 
     // MARK: - Confirmation view (email not yet confirmed)
@@ -167,6 +210,30 @@ struct AuthView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    // MARK: - Password reset
+
+    /// Sends a password reset email.
+    ///
+    /// If the email field is empty, surfaces a prompt instead. After a successful
+    /// send, shows a confirmation alert so the user knows to check their inbox.
+    private func triggerPasswordReset() {
+        let trimmed = email.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            resetAlertMessage = "Enter your email address above and tap 'Forgot password?' again."
+            return
+        }
+        isResettingPassword = true
+        Task {
+            defer { isResettingPassword = false }
+            do {
+                try await authManager.sendPasswordReset(email: trimmed)
+                resetAlertMessage = "A reset link has been sent to \(trimmed). Check your inbox."
+            } catch {
+                resetAlertMessage = "Couldn't send reset email. Please try again."
+            }
+        }
+    }
+
     // MARK: - Validation & submission
 
     private var isFormValid: Bool {
@@ -200,9 +267,33 @@ struct AuthView: View {
                     // fires and RootView re-routes automatically.
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = friendlyError(error)
             }
         }
+    }
+    /// Maps a raw Supabase / network error to a short, user-friendly message.
+    ///
+    /// Supabase SDK error messages are often technical or include internal codes.
+    /// This mapping ensures beta testers see plain English rather than SDK jargon.
+    private func friendlyError(_ error: Error) -> String {
+        let lower = error.localizedDescription.lowercased()
+        if lower.contains("invalid login credentials") || lower.contains("invalid credentials") {
+            return "Incorrect email or password."
+        }
+        if lower.contains("email not confirmed") {
+            return "Please confirm your email before signing in. Check your inbox."
+        }
+        if lower.contains("already registered") || lower.contains("user already exists") {
+            return "An account with this email already exists. Try signing in instead."
+        }
+        if lower.contains("rate limit") || lower.contains("email rate limit") {
+            return "Too many attempts. Please wait a moment and try again."
+        }
+        if lower.contains("network") || lower.contains("connection") ||
+           lower.contains("offline") || lower.contains("timed out") {
+            return "Connection problem. Check your internet and try again."
+        }
+        return "Something went wrong. Please try again."
     }
 }
 

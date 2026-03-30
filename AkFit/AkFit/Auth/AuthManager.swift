@@ -184,6 +184,15 @@ final class AuthManager {
         try await SupabaseClientProvider.shared.auth.signOut()
     }
 
+    /// Sends a password reset email to the given address.
+    ///
+    /// On success, Supabase emails a link the user can use to set a new password.
+    /// The link opens the Supabase project's hosted reset page — no custom URL
+    /// scheme is required for TestFlight.
+    func sendPasswordReset(email: String) async throws {
+        try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
+    }
+
     // MARK: - Post-onboarding
 
     /// Called by `OnboardingView` after persisting a new goal, so the app
