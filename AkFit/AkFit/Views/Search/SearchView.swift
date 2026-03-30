@@ -41,6 +41,7 @@ struct SearchView: View {
     @Environment(FoodLogStore.self)      private var logStore
     @Environment(FavoriteFoodStore.self) private var favStore
     @Environment(AuthManager.self)       private var authManager
+    @Environment(HealthKitService.self)  private var healthKit
     @Environment(AppRouter.self)         private var router
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
@@ -290,6 +291,9 @@ struct SearchView: View {
         let qty  = logStore.lastQuantity(for: food) ?? 1.0
         Task {
             try? await logStore.insert(food: food, quantity: qty, mealSlot: .inferred(), for: userId)
+            if let entry = logStore.lastLoggedEntry {
+                await healthKit.exportFoodLog(entry)
+            }
         }
     }
 
@@ -307,6 +311,9 @@ struct SearchView: View {
                 mealSlot: .inferred(),
                 for:      userId
             )
+            if let entry = logStore.lastLoggedEntry {
+                await healthKit.exportFoodLog(entry)
+            }
         }
     }
 
@@ -568,6 +575,7 @@ private extension SearchView {
         .environment(FoodLogStore())
         .environment(FavoriteFoodStore())
         .environment(AuthManager(previewMode: true))
+        .environment(HealthKitService())
         .environment(AppRouter())
 }
 
@@ -576,5 +584,6 @@ private extension SearchView {
         .environment(SearchView.previewLogStore)
         .environment(FavoriteFoodStore())
         .environment(SearchView.previewAuth)
+        .environment(HealthKitService())
         .environment(AppRouter())
 }

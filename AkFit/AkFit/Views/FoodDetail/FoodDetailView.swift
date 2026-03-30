@@ -31,6 +31,7 @@ struct FoodDetailView: View {
     @Environment(FoodLogStore.self)      private var logStore
     @Environment(FavoriteFoodStore.self) private var favStore
     @Environment(AuthManager.self)       private var authManager
+    @Environment(HealthKitService.self)  private var healthKit
     @Environment(\.dismiss)              private var dismiss
 
     // MARK: - Scaled nutrition
@@ -302,6 +303,9 @@ struct FoodDetailView: View {
                     defer { isLogging = false }
                     do {
                         try await logStore.insert(food: food, quantity: quantity, mealSlot: mealSlot, for: userId)
+                        if let entry = logStore.lastLoggedEntry {
+                            Task { await healthKit.exportFoodLog(entry) }
+                        }
                         dismiss()
                     } catch {
                         logError = "Couldn't save. Please try again."
@@ -470,6 +474,7 @@ private extension Double {
     .environment(FoodLogStore(previewLogs: existingLogs))
     .environment(FavoriteFoodStore())
     .environment(auth)
+    .environment(HealthKitService())
 }
 
 #Preview("Default serving") {
@@ -489,6 +494,7 @@ private extension Double {
     .environment(FoodLogStore())
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
+    .environment(HealthKitService())
 }
 
 #Preview("High fat food") {
@@ -508,6 +514,7 @@ private extension Double {
     .environment(FoodLogStore())
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
+    .environment(HealthKitService())
 }
 
 #Preview("Packaged / no gram weight") {
@@ -527,4 +534,5 @@ private extension Double {
     .environment(FoodLogStore())
     .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
+    .environment(HealthKitService())
 }

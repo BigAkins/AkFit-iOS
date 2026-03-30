@@ -11,7 +11,8 @@ import SwiftUI
 /// - `authManager.profile.createdAt` — member-since year
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
-    @Environment(AuthManager.self) private var authManager
+    @Environment(AuthManager.self)      private var authManager
+    @Environment(HealthKitService.self) private var healthKit
 
     @State private var showEditGoal          = false
     @State private var isSigningOut          = false
@@ -27,7 +28,13 @@ struct SettingsView: View {
                 if authManager.goal != nil {
                     targetsSection
                 }
+                if healthKit.isAvailable {
+                    healthSection
+                }
                 signOutSection
+            }
+            .onAppear {
+                healthKit.checkAuthorization()
             }
             .navigationTitle("Settings")
             .sheet(isPresented: $showEditGoal) {
@@ -150,6 +157,55 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Health section
+
+    private var healthSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                // Heart icon — filled and red when connected, outline otherwise.
+                Image(systemName: healthKit.authStatus == .authorized ? "heart.fill" : "heart")
+                    .foregroundStyle(healthKit.authStatus == .authorized ? .red : Color(.secondaryLabel))
+                    .frame(width: 24)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Apple Health")
+                        .foregroundStyle(.primary)
+                    Text(healthStatusCaption)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                // Right-side action — shown unless the user has actively denied.
+                if healthKit.authStatus == .authorized {
+                    Image(systemName: "checkmark")
+                        .foregroundStyle(.green)
+                        .font(.footnote.weight(.semibold))
+                } else if healthKit.authStatus == .notDetermined {
+                    Button("Connect") {
+                        Task { await healthKit.requestAuthorization() }
+                    }
+                    .font(.subheadline)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(.primary)
+                }
+            }
+            .padding(.vertical, 2)
+        } header: {
+            Text("Health")
+        }
+    }
+
+    private var healthStatusCaption: String {
+        switch healthKit.authStatus {
+        case .authorized:    return "Exporting food logs and weight to Health"
+        case .denied:        return "Enable in Settings → Privacy & Security → Health"
+        case .notDetermined: return "Export food logs and weight to Apple Health"
+        }
+    }
+
     // MARK: - Sign-out section
 
     private var signOutSection: some View {
@@ -241,9 +297,11 @@ struct SettingsView: View {
     )
     return SettingsView()
         .environment(auth)
+        .environment(HealthKitService())
 }
 
 #Preview("Signed in, no goal") {
     SettingsView()
         .environment(AuthManager(previewMode: true))
+        .environment(HealthKitService())
 }

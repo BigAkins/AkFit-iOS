@@ -13,6 +13,7 @@
 		61A191802F7930450061850D /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 61A1917F2F7930450061850D /* Realtime */; };
 		61A191822F7930450061850D /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191812F7930450061850D /* Storage */; };
 		61A191842F7930450061850D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191832F7930450061850D /* Supabase */; };
+		61A191862F7930450061850D /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 61A191852F7930450061850D /* HealthKit.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -36,6 +37,7 @@
 		61A1912F2F7921AE0061850D /* AkFit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AkFit.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A1913C2F7921AF0061850D /* AkFitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AkFitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A191462F7921AF0061850D /* AkFitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AkFitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		61A191852F7930450061850D /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = System/Library/Frameworks/HealthKit.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -90,6 +92,7 @@
 				61A1917A2F7930450061850D /* Auth in Frameworks */,
 				61A191822F7930450061850D /* Storage in Frameworks */,
 				61A191802F7930450061850D /* Realtime in Frameworks */,
+				61A191862F7930450061850D /* HealthKit.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,6 +139,7 @@
 		61A191782F7930450061850D /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				61A191852F7930450061850D /* HealthKit.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -456,6 +460,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "AkFit/AkFit.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 88C6Z8ZW5P;
@@ -489,6 +494,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "AkFit/AkFit.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 88C6Z8ZW5P;

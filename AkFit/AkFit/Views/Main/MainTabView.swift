@@ -46,4 +46,5 @@ struct MainTabView: View {
         .environment(FavoriteFoodStore())
         .environment(BodyweightStore())
         .environment(AppRouter())
+        .environment(HealthKitService())
 }

@@ -462,9 +462,10 @@ struct ProgressTabView: View {
 /// before persisting (`lbs / 2.20462`), matching the existing metric-internal
 /// pattern used throughout the app.
 private struct WeightLogSheet: View {
-    @Environment(BodyweightStore.self) private var weightStore
-    @Environment(AuthManager.self)     private var authManager
-    @Environment(\.dismiss)            private var dismiss
+    @Environment(BodyweightStore.self)  private var weightStore
+    @Environment(AuthManager.self)      private var authManager
+    @Environment(HealthKitService.self) private var healthKit
+    @Environment(\.dismiss)             private var dismiss
 
     let initialLbs: Int
 
@@ -569,13 +570,15 @@ private struct WeightLogSheet: View {
 
     private func save() {
         guard let userId = authManager.currentUserId else { return }
-        let kg = Double(weightLbs) / 2.20462
+        let kg       = Double(weightLbs) / 2.20462
+        let loggedAt = Date()
         isSaving  = true
         saveError = nil
         Task {
             defer { isSaving = false }
             do {
                 try await weightStore.log(weightKg: kg, for: userId)
+                Task { await healthKit.exportBodyweight(weightKg: kg, loggedAt: loggedAt) }
                 dismiss()
             } catch {
                 saveError = "Couldn't save weight. Please try again."
@@ -677,6 +680,7 @@ private extension ProgressTabView {
         .environment(FoodLogStore(previewWeekLogs: ProgressTabView.previewWeekLogs))
         .environment(BodyweightStore(previewLogs: ProgressTabView.previewWeightLogs))
         .environment(ProgressTabView.previewAuth())
+        .environment(HealthKitService())
 }
 
 #Preview("Empty") {
@@ -684,4 +688,5 @@ private extension ProgressTabView {
         .environment(FoodLogStore())
         .environment(BodyweightStore())
         .environment(ProgressTabView.previewAuth())
+        .environment(HealthKitService())
 }

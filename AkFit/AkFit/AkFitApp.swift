@@ -2,11 +2,12 @@ import SwiftUI
 
 @main
 struct AkFitApp: App {
-    @State private var authManager  = AuthManager()
-    @State private var logStore     = FoodLogStore()
-    @State private var favStore     = FavoriteFoodStore()
-    @State private var weightStore  = BodyweightStore()
-    @State private var router       = AppRouter()
+    @State private var authManager   = AuthManager()
+    @State private var logStore      = FoodLogStore()
+    @State private var favStore      = FavoriteFoodStore()
+    @State private var weightStore   = BodyweightStore()
+    @State private var router        = AppRouter()
+    @State private var healthKit     = HealthKitService()
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,7 @@ struct AkFitApp: App {
                 .environment(favStore)
                 .environment(weightStore)
                 .environment(router)
+                .environment(healthKit)
         }
     }
 }
