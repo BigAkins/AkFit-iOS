@@ -33,9 +33,21 @@ struct DashboardView: View {
         return s
     }
 
-    /// Running calorie total shown in the food log section header.
-    private var totalLoggedCalories: Int {
-        logStore.todayLogs.reduce(0) { $0 + $1.calories }
+    /// Meal slots that have at least one log entry today, in canonical order.
+    private var occupiedSlots: [MealSlot] {
+        MealSlot.orderedCases.filter { slot in
+            logStore.todayLogs.contains { $0.mealSlot == slot }
+        }
+    }
+
+    /// All of today's log entries that belong to a given meal slot.
+    private func logs(for slot: MealSlot) -> [FoodLog] {
+        logStore.todayLogs.filter { $0.mealSlot == slot }
+    }
+
+    /// Total calories logged in a given meal slot today.
+    private func slotCalories(_ slot: MealSlot) -> Int {
+        logs(for: slot).reduce(0) { $0 + $1.calories }
     }
 
     var body: some View {
@@ -61,13 +73,14 @@ struct DashboardView: View {
                         .listSectionSeparator(.hidden)
 
                         // ── Food log ───────────────────────────────────────────────
-                        // Rows are direct List Section children, so .swipeActions
-                        // works reliably. insetGrouped clips the Section to a rounded
-                        // card automatically — no manual clipShape needed.
-                        Section {
-                            if logStore.isRefreshing {
-                                // Show a subtle loading row while the initial fetch is in flight.
-                                // Prevents the empty-state from flashing for returning users.
+                        // Loading and empty states show a single "Today's food" section.
+                        // When entries exist they are grouped into per-meal sections
+                        // (Breakfast → Lunch → Dinner → Snack) so the log is easy to
+                        // scan at a glance. Each section clips to its own rounded card
+                        // automatically via insetGrouped, and .swipeActions on direct
+                        // List Section children works reliably.
+                        if logStore.isRefreshing {
+                            Section {
                                 HStack(spacing: 10) {
                                     ProgressView()
                                         .scaleEffect(0.8)
@@ -80,31 +93,36 @@ struct DashboardView: View {
                                 .listRowBackground(Color(UIColor.systemBackground))
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets())
-                            } else if logStore.todayLogs.isEmpty {
+                            } header: { foodLogHeader }
+                            .listSectionSeparator(.hidden)
+                        } else if logStore.todayLogs.isEmpty {
+                            Section {
                                 foodLogEmptyState
                                     .listRowBackground(Color(UIColor.systemBackground))
                                     .listRowSeparator(.hidden)
-                            } else {
-                                ForEach(logStore.todayLogs) { log in
-                                    FoodLogRow(log: log)
-                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                            Button(role: .destructive) {
-                                                Task { try? await logStore.delete(logId: log.id) }
-                                            } label: {
-                                                Label("Delete", systemImage: "trash")
+                            } header: { foodLogHeader }
+                            .listSectionSeparator(.hidden)
+                        } else {
+                            ForEach(occupiedSlots, id: \.self) { slot in
+                                Section {
+                                    ForEach(logs(for: slot)) { log in
+                                        FoodLogRow(log: log)
+                                            .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                                Button(role: .destructive) {
+                                                    Task { try? await logStore.delete(logId: log.id) }
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
                                             }
-                                        }
-                                        .listRowBackground(Color(.systemGray6))
-                                        // Zero row insets: the row's own .padding(.horizontal, 16)
-                                        // provides content padding; the section's inset margin
-                                        // provides the gap from screen edges.
-                                        .listRowInsets(EdgeInsets())
+                                            .listRowBackground(Color(.systemGray6))
+                                            .listRowInsets(EdgeInsets())
+                                    }
+                                } header: {
+                                    mealSectionHeader(slot)
                                 }
+                                .listSectionSeparator(.hidden)
                             }
-                        } header: {
-                            foodLogHeader
                         }
-                        .listSectionSeparator(.hidden)
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -139,24 +157,32 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: - Food log section header
+    // MARK: - Food log section headers
 
+    /// Used only for loading and empty states where no meal grouping applies.
     private var foodLogHeader: some View {
+        Text("Today's food")
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .textCase(nil)
+            .padding(.bottom, 4)
+    }
+
+    /// Per-meal section header showing the meal name and its calorie subtotal.
+    private func mealSectionHeader(_ slot: MealSlot) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text("Today's food")
+            Text(slot.displayName)
                 .font(.headline)
                 .foregroundStyle(.primary)
             Spacer()
-            if !logStore.todayLogs.isEmpty {
-                Text("\(totalLoggedCalories) kcal")
-                    .font(.subheadline.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .contentTransition(.numericText())
-                    .animation(.snappy, value: totalLoggedCalories)
-            }
+            Text("\(slotCalories(slot)) kcal")
+                .font(.subheadline.weight(.medium))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .contentTransition(.numericText())
+                .animation(.snappy, value: slotCalories(slot))
         }
-        .textCase(nil)  // prevent the default List section header uppercase
+        .textCase(nil)
         .padding(.bottom, 4)
     }
 
@@ -455,6 +481,7 @@ private extension DashboardView {
                 foodName: "Oats, rolled", servingLabel: "40g (½ cup)",
                 quantity: 1.0,
                 calories: 154, proteinG: 5.4, carbsG: 26.0, fatG: 2.8,
+                mealSlot: .breakfast,
                 loggedAt: now.addingTimeInterval(-5 * 3600),
                 createdAt: now.addingTimeInterval(-5 * 3600)
             ),
@@ -463,6 +490,7 @@ private extension DashboardView {
                 foodName: "Chicken Breast, cooked", servingLabel: "100g",
                 quantity: 1.5,
                 calories: 248, proteinG: 46.5, carbsG: 0,   fatG: 5.4,
+                mealSlot: .lunch,
                 loggedAt: now.addingTimeInterval(-3 * 3600),
                 createdAt: now.addingTimeInterval(-3 * 3600)
             ),
@@ -471,6 +499,7 @@ private extension DashboardView {
                 foodName: "Whey Protein", servingLabel: "1 scoop (30g)",
                 quantity: 1.0,
                 calories: 120, proteinG: 24.0, carbsG: 3.0, fatG: 1.5,
+                mealSlot: .snack,
                 loggedAt: now.addingTimeInterval(-1 * 3600),
                 createdAt: now.addingTimeInterval(-1 * 3600)
             ),

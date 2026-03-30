@@ -289,19 +289,22 @@ struct SearchView: View {
         let food = fav.asFoodItem()
         let qty  = logStore.lastQuantity(for: food) ?? 1.0
         Task {
-            try? await logStore.insert(food: food, quantity: qty, for: userId)
+            try? await logStore.insert(food: food, quantity: qty, mealSlot: .inferred(), for: userId)
         }
     }
 
     /// Logs `log` at its stored quantity without opening `FoodDetailView`.
     /// The existing `onChange(of: logStore.lastLoggedEntry?.id)` handler
     /// fires the banner + Undo automatically — no extra wiring needed here.
+    /// Meal slot is inferred from the current time (not copied from the
+    /// original log) since the user is logging this food right now.
     private func quickLog(_ log: FoodLog) {
         guard let userId = authManager.currentUserId else { return }
         Task {
             try? await logStore.insert(
                 food:     log.asFoodItem(),
                 quantity: log.quantity,
+                mealSlot: .inferred(),
                 for:      userId
             )
         }
@@ -543,15 +546,15 @@ private extension SearchView {
             FoodLog(id: UUID(), userId: uid, foodName: "Oats, rolled",
                     servingLabel: "40g (half cup)", quantity: 1.0,
                     calories: 154, proteinG: 5.4, carbsG: 26.0, fatG: 2.8,
-                    loggedAt: Date(), createdAt: Date()),
+                    mealSlot: .breakfast, loggedAt: Date(), createdAt: Date()),
             FoodLog(id: UUID(), userId: uid, foodName: "Whey Protein",
                     servingLabel: "1 scoop (30g)", quantity: 1.0,
                     calories: 120, proteinG: 24.0, carbsG: 3.0, fatG: 1.5,
-                    loggedAt: Date(), createdAt: Date()),
+                    mealSlot: .snack, loggedAt: Date(), createdAt: Date()),
             FoodLog(id: UUID(), userId: uid, foodName: "Chicken Breast, cooked",
                     servingLabel: "100g", quantity: 1.5,
                     calories: 248, proteinG: 46.5, carbsG: 0.0, fatG: 5.4,
-                    loggedAt: Date(), createdAt: Date()),
+                    mealSlot: .lunch, loggedAt: Date(), createdAt: Date()),
         ]
         let recents: [FoodLog] = todayLogs
         return FoodLogStore(previewLogs: todayLogs, previewRecents: recents)

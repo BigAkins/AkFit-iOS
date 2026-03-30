@@ -346,6 +346,7 @@ private extension ProgressTabView {
                 id: UUID(), userId: uid,
                 foodName: "Sample", servingLabel: "1 serving", quantity: 1.0,
                 calories: kcal, proteinG: p, carbsG: c, fatG: f,
+                mealSlot: .snack,
                 loggedAt: loggedAt, createdAt: loggedAt
             )
         }

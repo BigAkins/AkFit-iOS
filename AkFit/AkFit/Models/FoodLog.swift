@@ -22,6 +22,9 @@ struct FoodLog: Identifiable, Codable, Sendable {
     let carbsG:       Double
     /// Pre-scaled fat grams (food.fatG × quantity).
     let fatG:         Double
+    /// Which meal this entry belongs to. Defaults to `.snack` for rows that
+    /// existed before the meal_slot column was added (via DB migration default).
+    let mealSlot:     MealSlot
     /// When the food was consumed (device-local time, stored as UTC in the DB).
     let loggedAt:     Date
     let createdAt:    Date
@@ -36,6 +39,7 @@ struct FoodLog: Identifiable, Codable, Sendable {
         case proteinG     = "protein_g"
         case carbsG       = "carbs_g"
         case fatG         = "fat_g"
+        case mealSlot     = "meal_slot"
         case loggedAt     = "logged_at"
         case createdAt    = "created_at"
     }

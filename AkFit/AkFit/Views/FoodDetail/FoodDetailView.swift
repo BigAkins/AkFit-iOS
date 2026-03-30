@@ -16,6 +16,7 @@ struct FoodDetailView: View {
     let food: FoodItem
 
     @State private var quantity:  Double
+    @State private var mealSlot: MealSlot = MealSlot.inferred()
     @State private var isLogging: Bool    = false
     @State private var logError:  String? = nil
 
@@ -79,6 +80,7 @@ struct FoodDetailView: View {
 
                 calorieMacroCard
                 portionCard
+                mealSlotCard
 
                 // After-log budget preview — only shown when a goal is active.
                 // Values update live as the quantity stepper changes.
@@ -203,6 +205,25 @@ struct FoodDetailView: View {
         return "\(formatQuantity(quantity)) servings · \(totalG)g total"
     }
 
+    // MARK: - Meal slot card
+
+    /// Segmented picker for assigning this entry to a meal.
+    /// Pre-selected via `MealSlot.inferred()` based on the current hour —
+    /// the user can override with a single tap before confirming the log.
+    private var mealSlotCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Meal")
+                .font(.headline)
+
+            Picker("Meal", selection: $mealSlot) {
+                ForEach(MealSlot.allCases, id: \.self) { slot in
+                    Text(slot.displayName).tag(slot)
+                }
+            }
+            .pickerStyle(.segmented)
+        }
+    }
+
     // MARK: - After-logging card
 
     /// Compact "After this log" card showing projected remaining budget.
@@ -280,7 +301,7 @@ struct FoodDetailView: View {
                 Task {
                     defer { isLogging = false }
                     do {
-                        try await logStore.insert(food: food, quantity: quantity, for: userId)
+                        try await logStore.insert(food: food, quantity: quantity, mealSlot: mealSlot, for: userId)
                         dismiss()
                     } catch {
                         logError = "Couldn't save. Please try again."
@@ -427,11 +448,11 @@ private extension Double {
         FoodLog(id: UUID(), userId: uid,
                 foodName: "Oatmeal", servingLabel: "1 cup", quantity: 1.0,
                 calories: 307, proteinG: 11, carbsG: 55, fatG: 5,
-                loggedAt: now, createdAt: now),
+                mealSlot: .breakfast, loggedAt: now, createdAt: now),
         FoodLog(id: UUID(), userId: uid,
                 foodName: "Greek Yogurt", servingLabel: "200g", quantity: 1.0,
                 calories: 130, proteinG: 17, carbsG: 9, fatG: 3,
-                loggedAt: now, createdAt: now),
+                mealSlot: .breakfast, loggedAt: now, createdAt: now),
     ]
     return NavigationStack {
         FoodDetailView(food: FoodItem(

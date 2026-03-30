@@ -168,7 +168,7 @@ final class FoodLogStore {
     ///
     /// Scaled nutrition values are computed here so the DB row is self-contained:
     /// the dashboard reads them with a plain `SUM`, no further math required.
-    func insert(food: FoodItem, quantity: Double, for userId: UUID) async throws {
+    func insert(food: FoodItem, quantity: Double, mealSlot: MealSlot, for userId: UUID) async throws {
         let payload = FoodLogInsert(
             userId:       userId,
             foodName:     food.name,
@@ -178,6 +178,7 @@ final class FoodLogStore {
             proteinG:     food.proteinG * quantity,
             carbsG:       food.carbsG   * quantity,
             fatG:         food.fatG     * quantity,
+            mealSlot:     mealSlot,
             loggedAt:     Date()
         )
 
@@ -258,6 +259,7 @@ private struct FoodLogInsert: Encodable {
     let proteinG:     Double
     let carbsG:       Double
     let fatG:         Double
+    let mealSlot:     MealSlot
     let loggedAt:     Date
 
     enum CodingKeys: String, CodingKey {
@@ -269,6 +271,7 @@ private struct FoodLogInsert: Encodable {
         case proteinG     = "protein_g"
         case carbsG       = "carbs_g"
         case fatG         = "fat_g"
+        case mealSlot     = "meal_slot"
         case loggedAt     = "logged_at"
     }
 }
