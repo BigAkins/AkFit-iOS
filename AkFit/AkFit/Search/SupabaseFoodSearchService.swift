@@ -28,6 +28,45 @@ struct SupabaseFoodSearchService: FoodSearchService {
             return []
         }
     }
+
+    /// Returns a small, curated set of foods for the empty-state "Suggestions"
+    /// section. Values come from `generic_foods` so they are always consistent
+    /// with search results.
+    ///
+    /// One serving per food is returned — the smallest declared serving weight.
+    /// Foods appear in `priorityNames` order (protein-first, practical for
+    /// body-composition goals). Returns `[]` silently on any error.
+    func fetchSuggestions() async -> [FoodItem] {
+        let priorityNames: [String] = [
+            "Chicken Breast, cooked",
+            "Egg, whole",
+            "Greek Yogurt, plain nonfat",
+            "Oats, rolled (dry)",
+            "Whey Protein Powder",
+            "Banana",
+            "Peanut Butter",
+        ]
+        do {
+            let rows: [GenericFoodRow] = try await SupabaseClientProvider.shared
+                .from("generic_foods")
+                .select()
+                .in("food_name", values: priorityNames)
+                .order("food_name")
+                .order("serving_weight_g", ascending: true)
+                .execute()
+                .value
+            // Keep only the first (smallest) serving per food name.
+            var seen = Set<String>()
+            let deduped = rows.filter { seen.insert($0.foodName).inserted }
+            // Re-order to the desired priority sequence.
+            let rank = Dictionary(uniqueKeysWithValues: priorityNames.enumerated().map { ($1, $0) })
+            return deduped
+                .sorted { (rank[$0.foodName] ?? 99) < (rank[$1.foodName] ?? 99) }
+                .map(FoodItem.init)
+        } catch {
+            return []
+        }
+    }
 }
 
 // MARK: - Row model

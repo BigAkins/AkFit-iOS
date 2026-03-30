@@ -6,18 +6,21 @@ import SwiftUI
 /// (which sets `AppRouter.selectedTab = .search`).
 ///
 /// **Empty state:** shows a "Recent" section (last 8 distinct foods logged,
-/// newest first) above a static "Common foods" fallback list. Recent foods
-/// are fetched from Supabase via `FoodLogStore.refreshRecents` on first appear
-/// and updated in memory after every successful log — no re-fetch needed.
+/// newest first) above a "Suggestions" list pulled from Supabase
+/// `generic_foods`. Both are fetched concurrently on first appear.
 ///
-/// **Search state:** results from `FoodSearchService` (currently mock).
-/// Swap `searchService` for a real implementation when a food database is ready.
+/// **Search state:** uses `HybridFoodSearchService` — Supabase generic foods
+/// first, Open Food Facts fallback for branded/packaged items. A 250 ms
+/// debounce coalesces rapid keystrokes before the first network hop fires,
+/// so the search only triggers once the user pauses.
 ///
 /// Tapping any row pushes `FoodDetailView` where the user adjusts quantity
 /// and taps "Log food" to persist the entry.
 struct SearchView: View {
     @State private var query: String = ""
     @State private var results: [FoodItem] = []
+    @State private var suggestions: [FoodItem] = []
+    @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>? = nil
     @State private var showScanner = false
     /// Set when a barcode scan resolves to a food item. Triggers navigation to `FoodDetailView`.
@@ -27,26 +30,22 @@ struct SearchView: View {
     @Environment(AuthManager.self)  private var authManager
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
-
-    /// Static fallback list shown below recents (or alone when recents are empty).
-    private let suggestions: [FoodItem] = {
-        let names: Set<String> = [
-            "Chicken Breast, cooked", "Greek Yogurt, plain",
-            "Oats, rolled", "Egg, whole", "Whey Protein",
-            "Banana", "Peanut Butter"
-        ]
-        return FoodItem.mockDatabase.filter { names.contains($0.name) }
-    }()
+    /// Used exclusively to populate the empty-state suggestions from Supabase.
+    private let suggestionService = SupabaseFoodSearchService()
 
     var body: some View {
         NavigationStack {
             Group {
-                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                let q = query.trimmingCharacters(in: .whitespaces)
+                if q.isEmpty {
                     promptView
-                } else if results.isEmpty {
-                    noResultsView
-                } else {
+                } else if !results.isEmpty {
+                    // Stale results stay visible while a new debounced search is in flight.
                     resultsList
+                } else if isSearching {
+                    loadingView
+                } else {
+                    noResultsView
                 }
             }
             .navigationTitle("Search")
@@ -75,12 +74,12 @@ struct SearchView: View {
             }
             .onChange(of: query) { performSearch() }
             .task {
-                // Fetch recent foods when the Search tab first appears.
-                // After logging, FoodLogStore.insert keeps recentFoods in sync
-                // in memory so no re-fetch is needed for the same session.
+                // Fetch suggestions and recent foods concurrently on first appear.
+                async let fetchedSuggestions = suggestionService.fetchSuggestions()
                 if let userId = authManager.currentUserId {
                     await logStore.refreshRecents(userId: userId)
                 }
+                suggestions = await fetchedSuggestions
             }
         }
     }
@@ -88,7 +87,7 @@ struct SearchView: View {
     // MARK: - View states
 
     /// Shown when the search field is empty.
-    /// "Recent" section appears above "Common foods" when the user has prior logs.
+    /// "Recent" section appears above "Suggestions" when the user has prior logs.
     private var promptView: some View {
         List {
             if !logStore.recentFoods.isEmpty {
@@ -98,13 +97,25 @@ struct SearchView: View {
                     }
                 }
             }
-            Section("Common foods") {
-                ForEach(suggestions) { food in
-                    foodLink(food)
+            if !suggestions.isEmpty {
+                Section("Suggestions") {
+                    ForEach(suggestions) { food in
+                        foodLink(food)
+                    }
                 }
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    /// Shown while a debounce delay or network request is in progress and
+    /// there are no stale results to display.
+    private var loadingView: some View {
+        VStack {
+            Spacer()
+            ProgressView()
+            Spacer()
+        }
     }
 
     private var noResultsView: some View {
@@ -155,12 +166,19 @@ struct SearchView: View {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else {
             results = []
+            isSearching = false
             return
         }
+        isSearching = true
         searchTask = Task {
+            // 250 ms debounce — rapid keystrokes cancel this sleep and restart,
+            // so the network hop only fires once the user pauses.
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
             let found = await searchService.search(query: q)
             guard !Task.isCancelled else { return }
             results = found
+            isSearching = false
         }
     }
 }
