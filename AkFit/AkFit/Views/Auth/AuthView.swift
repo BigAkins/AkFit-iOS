@@ -128,7 +128,7 @@ struct AuthView: View {
 
             Spacer()
 
-            Button("Back to sign in") {
+            Button("Back to Sign In") {
                 awaitingConfirmation = false
                 mode = .signIn
                 password = ""

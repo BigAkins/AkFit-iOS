@@ -194,9 +194,12 @@ struct SearchView: View {
     /// Shown while a debounce delay or network request is in progress and
     /// there are no stale results to display.
     private var loadingView: some View {
-        VStack {
+        VStack(spacing: 10) {
             Spacer()
             ProgressView()
+            Text("Searching…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
             Spacer()
         }
     }
@@ -311,9 +314,12 @@ struct SearchView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .font(.body.weight(.medium))
-            Text("Food logged")
+            // Show the logged food name for immediate confirmation context.
+            // Falls back to generic label if bannerEntry is somehow nil.
+            Text(bannerEntry.map { "Logged · \($0.foodName)" } ?? "Food logged")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.primary)
+                .lineLimit(1)
             Spacer(minLength: 0)
             Button("View") { dismissBanner(navigateToDashboard: true) }
                 .font(.subheadline.weight(.semibold))

@@ -1,24 +1,11 @@
-//
-//  ContentView.swift
-//  AkFit
-//
-//  Created by Akinola Ogunbiyi on 3/29/26.
-//
+// ContentView.swift
+// This file is the default Xcode project template stub and is not used by AkFit.
+// The app's entry point is AkFitApp.swift → RootView → AuthView / OnboardingView / MainTabView.
 
 import SwiftUI
 
 struct ContentView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
+        EmptyView()
     }
-}
-
-#Preview {
-    ContentView()
 }

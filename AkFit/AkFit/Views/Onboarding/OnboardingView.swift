@@ -441,11 +441,20 @@ private struct ResultsStepView: View {
         data.calculatorInput.map { MacroCalculator.calculate($0) }
     }
 
-    /// Short context label shown below the title, e.g. "Fat Loss · Moderate"
+    /// Short context label shown below the title, e.g. "Fat Loss · Moderate".
+    ///
+    /// Uses short pace names (no lb/week detail) to keep the subtitle concise.
+    /// The full pace detail is shown on the pace selection step where it aids choice.
     private var contextLabel: String? {
         guard let input = data.calculatorInput else { return nil }
         if input.goalType == .maintenance { return input.goalType.displayName }
-        return "\(input.goalType.displayName) · \(input.pace.displayName)"
+        let shortPace: String
+        switch input.pace {
+        case .slow:     shortPace = "Slow"
+        case .moderate: shortPace = "Moderate"
+        case .fast:     shortPace = "Fast"
+        }
+        return "\(input.goalType.displayName) · \(shortPace)"
     }
 
     var body: some View {
@@ -501,9 +510,9 @@ private struct ResultsStepView: View {
 
     private func save() {
         guard
-            let out   = output,
-            let input = data.calculatorInput,
-            let userId = authManager.session?.user.id
+            let out    = output,
+            let input  = data.calculatorInput,
+            let userId = authManager.currentUserId
         else { return }
 
         isSaving = true
@@ -516,7 +525,7 @@ private struct ResultsStepView: View {
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = "Couldn't save your targets. Please try again."
             }
         }
     }
@@ -644,7 +653,19 @@ private struct MacroChip: View {
 
 // MARK: - Preview
 
-#Preview {
+#Preview("Step 1 — Sex") {
     OnboardingView()
         .environment(AuthManager(previewMode: true))
+}
+
+/// Exercises the Results step (step 6) directly, bypassing the need to
+/// step through the full onboarding flow in Xcode Canvas.
+#Preview("Step 6 — Results") {
+    let data = OnboardingData()
+    data.sex           = .male
+    data.goalType      = .fatLoss
+    data.activityLevel = .moderate
+    data.pace          = .moderate
+    // heightFeet / heightInches / weightLbs / birthYear use OnboardingData defaults.
+    return ResultsStepView(data: data, authManager: AuthManager(previewMode: true))
 }

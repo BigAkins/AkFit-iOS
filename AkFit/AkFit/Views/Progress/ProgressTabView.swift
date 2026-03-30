@@ -84,7 +84,7 @@ struct ProgressTabView: View {
                         .foregroundStyle(Color.red.opacity(0.40))
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
                         .annotation(position: .top, alignment: .trailing, spacing: 4) {
-                            Text("Goal")
+                            Text("Target")
                                 .font(.caption2)
                                 .foregroundStyle(Color.red.opacity(0.55))
                                 .padding(.trailing, 4)

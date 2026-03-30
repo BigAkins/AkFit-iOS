@@ -65,7 +65,22 @@ struct DashboardView: View {
                         // works reliably. insetGrouped clips the Section to a rounded
                         // card automatically — no manual clipShape needed.
                         Section {
-                            if logStore.todayLogs.isEmpty {
+                            if logStore.isRefreshing {
+                                // Show a subtle loading row while the initial fetch is in flight.
+                                // Prevents the empty-state from flashing for returning users.
+                                HStack(spacing: 10) {
+                                    ProgressView()
+                                        .scaleEffect(0.8)
+                                    Text("Loading…")
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 20)
+                                .listRowBackground(Color(UIColor.systemBackground))
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets())
+                            } else if logStore.todayLogs.isEmpty {
                                 foodLogEmptyState
                                     .listRowBackground(Color(UIColor.systemBackground))
                                     .listRowSeparator(.hidden)
