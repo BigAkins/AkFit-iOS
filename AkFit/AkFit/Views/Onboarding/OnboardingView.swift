@@ -208,11 +208,12 @@ private struct BodyStatsStepView: View {
     @Bindable var data: OnboardingData
     let onNext: () -> Void
 
-    // Ranges computed once at struct init — values are stable for the app session.
-    private static let thisYear    = Calendar.current.component(.year, from: Date())
-    private static let yearRange   = Array(stride(from: thisYear - 80, through: thisYear - 15, by: 1))
-    private static let heightRange = Array(stride(from: 130.0, through: 220.0, by: 1.0))
-    private static let weightRange = Array(stride(from: 30.0, through: 200.0, by: 1.0))
+    // Ranges computed once — values are stable for the app session.
+    private static let thisYear       = Calendar.current.component(.year, from: Date())
+    private static let yearRange      = Array(stride(from: thisYear - 80, through: thisYear - 15, by: 1))
+    private static let feetRange      = Array(4...7)
+    private static let inchesRange    = Array(0...11)
+    private static let weightLbsRange = Array(66...440)   // 30–200 kg
 
     var body: some View {
         OnboardingStepLayout(
@@ -239,15 +240,18 @@ private struct BodyStatsStepView: View {
 
                 Divider().padding(.horizontal, 24)
 
-                // Height + weight — two columns matching the primary reference
+                // Height (ft + in) and weight (lbs) — three equal columns.
+                // Internal storage stays metric; pickers bind to US-unit properties.
                 HStack(spacing: 0) {
+
+                    // ── Feet ──────────────────────────────────────────────
                     VStack(spacing: 4) {
-                        Text("Height")
+                        Text("ft")
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.secondary)
-                        Picker("Height", selection: $data.heightCm) {
-                            ForEach(Self.heightRange, id: \.self) {
-                                Text("\(Int($0)) cm").tag($0)
+                        Picker("Feet", selection: $data.heightFeet) {
+                            ForEach(Self.feetRange, id: \.self) {
+                                Text("\($0)").tag($0)
                             }
                         }
                         .pickerStyle(.wheel)
@@ -261,13 +265,35 @@ private struct BodyStatsStepView: View {
                         .frame(width: 0.5)
                         .padding(.vertical, 16)
 
+                    // ── Inches ────────────────────────────────────────────
                     VStack(spacing: 4) {
-                        Text("Weight")
+                        Text("in")
                             .font(.footnote.weight(.medium))
                             .foregroundStyle(.secondary)
-                        Picker("Weight", selection: $data.weightKg) {
-                            ForEach(Self.weightRange, id: \.self) {
-                                Text("\(Int($0)) kg").tag($0)
+                        Picker("Inches", selection: $data.heightInches) {
+                            ForEach(Self.inchesRange, id: \.self) {
+                                Text("\($0)").tag($0)
+                            }
+                        }
+                        .pickerStyle(.wheel)
+                        .frame(height: 144)
+                        .clipped()
+                    }
+                    .frame(maxWidth: .infinity)
+
+                    Rectangle()
+                        .fill(Color(.systemGray4))
+                        .frame(width: 0.5)
+                        .padding(.vertical, 16)
+
+                    // ── Weight ────────────────────────────────────────────
+                    VStack(spacing: 4) {
+                        Text("lbs")
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Picker("Weight", selection: $data.weightLbs) {
+                            ForEach(Self.weightLbsRange, id: \.self) {
+                                Text("\($0)").tag($0)
                             }
                         }
                         .pickerStyle(.wheel)

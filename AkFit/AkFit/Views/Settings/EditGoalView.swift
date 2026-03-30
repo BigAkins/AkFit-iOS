@@ -42,6 +42,20 @@ struct EditGoalView: View {
         draft.calculatorInput.map { MacroCalculator.calculate($0) }
     }
 
+    /// A binding to total height expressed as a single integer number of inches
+    /// (feet × 12 + inches). The Stepper advances 1 inch per tap and the
+    /// setter automatically carries over between the feet and inches components.
+    private var totalInchesBinding: Binding<Int> {
+        Binding(
+            get: { draft.heightFeet * 12 + draft.heightInches },
+            set: { total in
+                let clamped         = min(max(total, 48), 95)
+                draft.heightFeet   = clamped / 12
+                draft.heightInches = clamped % 12
+            }
+        )
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -87,16 +101,19 @@ struct EditGoalView: View {
 
                 // ── Body stats ───────────────────────────────────────────
                 Section("Body stats") {
+                    // Weight in pounds — 1 lb step.
                     Stepper(
-                        "Weight: \(Int(draft.weightKg.rounded())) kg",
-                        value: $draft.weightKg,
-                        in: 30...200,
+                        "Weight: \(draft.weightLbs) lbs",
+                        value: $draft.weightLbs,
+                        in: 66...440,
                         step: 1
                     )
+                    // Height as a single stepper that advances 1 inch at a time,
+                    // carrying over automatically between feet and inches.
                     Stepper(
-                        "Height: \(Int(draft.heightCm.rounded())) cm",
-                        value: $draft.heightCm,
-                        in: 130...220,
+                        "Height: \(draft.heightFeet)′ \(draft.heightInches)″",
+                        value: totalInchesBinding,
+                        in: 48...95,   // 4′ 0″ = 48 in … 7′ 11″ = 95 in
                         step: 1
                     )
                     Picker("Born in", selection: $draft.birthYear) {
