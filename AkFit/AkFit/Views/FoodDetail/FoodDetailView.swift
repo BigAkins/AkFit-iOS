@@ -15,9 +15,17 @@ import SwiftUI
 struct FoodDetailView: View {
     let food: FoodItem
 
-    @State private var quantity:  Double  = 1.0
+    @State private var quantity:  Double
     @State private var isLogging: Bool    = false
     @State private var logError:  String? = nil
+
+    /// `initialQuantity` seeds the portion stepper on first render.
+    /// Pass the user's last-used quantity for repeat foods; omit for new foods
+    /// and the stepper defaults to 1 serving.
+    init(food: FoodItem, initialQuantity: Double = 1.0) {
+        self.food     = food
+        self._quantity = State(initialValue: initialQuantity)
+    }
 
     @Environment(FoodLogStore.self)      private var logStore
     @Environment(FavoriteFoodStore.self) private var favStore

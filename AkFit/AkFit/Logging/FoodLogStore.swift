@@ -53,6 +53,23 @@ final class FoodLogStore {
         self.weekLogs    = previewWeekLogs
     }
 
+    // MARK: - Last-used quantity
+
+    /// Returns the quantity the user last logged for a food with the same name
+    /// and serving label, or `nil` if no matching history exists in `recentFoods`.
+    ///
+    /// Matched on `(foodName, servingLabel)` — not just `foodName` — to avoid
+    /// using a quantity from a different serving size of the same food (e.g.
+    /// 4 oz chicken should not prefill the 100 g variant).
+    ///
+    /// `recentFoods` is already in memory by the time `FoodDetailView` opens,
+    /// so this is a pure synchronous lookup with no network cost.
+    func lastQuantity(for food: FoodItem) -> Double? {
+        recentFoods
+            .first { $0.foodName == food.name && $0.servingLabel == food.servingSize }
+            .map(\.quantity)
+    }
+
     // MARK: - Banner state
 
     /// Clears `lastLoggedEntry` after the banner has been picked up by the UI.

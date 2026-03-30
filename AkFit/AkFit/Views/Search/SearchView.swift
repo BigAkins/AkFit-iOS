@@ -70,7 +70,7 @@ struct SearchView: View {
                 }
             }
             .navigationDestination(item: $scannedFood) { food in
-                FoodDetailView(food: food)
+                FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
             }
             .sheet(isPresented: $showScanner) {
                 BarcodeScannerView { food in
@@ -189,7 +189,7 @@ struct SearchView: View {
     @ViewBuilder
     private func foodLink(_ food: FoodItem) -> some View {
         NavigationLink {
-            FoodDetailView(food: food)
+            FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
         } label: {
             FoodRow(food: food)
         }
