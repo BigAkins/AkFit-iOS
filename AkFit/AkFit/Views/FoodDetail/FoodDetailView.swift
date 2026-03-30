@@ -19,9 +19,10 @@ struct FoodDetailView: View {
     @State private var isLogging: Bool    = false
     @State private var logError:  String? = nil
 
-    @Environment(FoodLogStore.self) private var logStore
-    @Environment(AuthManager.self)  private var authManager
-    @Environment(\.dismiss)         private var dismiss
+    @Environment(FoodLogStore.self)      private var logStore
+    @Environment(FavoriteFoodStore.self) private var favStore
+    @Environment(AuthManager.self)       private var authManager
+    @Environment(\.dismiss)              private var dismiss
 
     // MARK: - Scaled nutrition
 
@@ -50,6 +51,19 @@ struct FoodDetailView: View {
         }
         .navigationTitle(food.name)
         .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                let isFav = favStore.isFavorite(food)
+                Button {
+                    guard let userId = authManager.currentUserId else { return }
+                    Task { try? await favStore.toggle(food: food, for: userId) }
+                } label: {
+                    Image(systemName: isFav ? "star.fill" : "star")
+                        .foregroundStyle(isFav ? Color.yellow : Color.secondary)
+                }
+                .accessibilityLabel(isFav ? "Remove from favorites" : "Add to favorites")
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             logButton
         }
@@ -307,6 +321,7 @@ private extension Double {
         ))
     }
     .environment(FoodLogStore())
+    .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
 }
 
@@ -325,6 +340,7 @@ private extension Double {
         ))
     }
     .environment(FoodLogStore())
+    .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
 }
 
@@ -343,5 +359,6 @@ private extension Double {
         ))
     }
     .environment(FoodLogStore())
+    .environment(FavoriteFoodStore())
     .environment(AuthManager(previewMode: true))
 }

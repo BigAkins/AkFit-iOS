@@ -29,9 +29,10 @@ struct SearchView: View {
     @State private var bannerEntry: FoodLog? = nil
     @State private var autoDismissTask: Task<Void, Never>? = nil
 
-    @Environment(FoodLogStore.self) private var logStore
-    @Environment(AuthManager.self)  private var authManager
-    @Environment(AppRouter.self)    private var router
+    @Environment(FoodLogStore.self)      private var logStore
+    @Environment(FavoriteFoodStore.self) private var favStore
+    @Environment(AuthManager.self)       private var authManager
+    @Environment(AppRouter.self)         private var router
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -100,10 +101,12 @@ struct SearchView: View {
                 }
             }
             .task {
-                // Fetch suggestions and recent foods concurrently on first appear.
+                // Fetch suggestions, recents, and favorites concurrently on first appear.
                 async let fetchedSuggestions = suggestionService.fetchSuggestions()
                 if let userId = authManager.currentUserId {
-                    await logStore.refreshRecents(userId: userId)
+                    async let recents: Void = logStore.refreshRecents(userId: userId)
+                    async let favs: Void    = favStore.refresh(userId: userId)
+                    _ = await (recents, favs)
                 }
                 suggestions = await fetchedSuggestions
             }
@@ -116,6 +119,13 @@ struct SearchView: View {
     /// "Recent" section appears above "Suggestions" when the user has prior logs.
     private var promptView: some View {
         List {
+            if !favStore.favorites.isEmpty {
+                Section("Favorites") {
+                    ForEach(favStore.favorites) { fav in
+                        foodLink(fav.asFoodItem())
+                    }
+                }
+            }
             if !logStore.recentFoods.isEmpty {
                 Section("Recent") {
                     ForEach(logStore.recentFoods) { log in
@@ -339,6 +349,7 @@ private struct MacroLine: View {
 #Preview("No recents") {
     SearchView()
         .environment(FoodLogStore())
+        .environment(FavoriteFoodStore())
         .environment(AuthManager(previewMode: true))
         .environment(AppRouter())
 }
@@ -361,6 +372,7 @@ private struct MacroLine: View {
     ]
     SearchView()
         .environment(FoodLogStore(previewRecents: recents))
+        .environment(FavoriteFoodStore())
         .environment(AuthManager(previewMode: true))
         .environment(AppRouter())
 }

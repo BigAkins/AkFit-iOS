@@ -4,6 +4,7 @@ import SwiftUI
 struct AkFitApp: App {
     @State private var authManager = AuthManager()
     @State private var logStore    = FoodLogStore()
+    @State private var favStore    = FavoriteFoodStore()
     @State private var router      = AppRouter()
 
     var body: some Scene {
@@ -11,6 +12,7 @@ struct AkFitApp: App {
             RootView()
                 .environment(authManager)
                 .environment(logStore)
+                .environment(favStore)
                 .environment(router)
         }
     }
