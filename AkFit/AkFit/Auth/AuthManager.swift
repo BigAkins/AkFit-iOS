@@ -192,4 +192,11 @@ final class AuthManager {
         self.goal    = goal
         self.profile = profile
     }
+
+    /// Called by `EditGoalView` after the user saves updated targets.
+    /// Updates the in-memory goal so all views (dashboard, progress tab)
+    /// immediately reflect the new targets without a full re-fetch.
+    func updateGoal(_ goal: UserGoal) {
+        self.goal = goal
+    }
 }

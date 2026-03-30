@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - OnboardingData
+
 /// Local state container for the onboarding flow.
 ///
 /// Passed through the step views via the environment. Once all required
@@ -41,5 +43,31 @@ final class OnboardingData {
             goalType: goalType,
             pace: pace
         )
+    }
+}
+
+// MARK: - Settings pre-population
+
+extension OnboardingData {
+    /// Builds an `OnboardingData` pre-populated from a saved `UserGoal`.
+    ///
+    /// Used by `EditGoalView` to seed the edit form with the user's current
+    /// goal inputs so they only need to change what they want to update.
+    ///
+    /// `age` is reconstructed as `currentYear − goal.age`, which gives the
+    /// same approximate birth year the onboarding collected. Falls back to
+    /// sensible defaults for nullable goal fields.
+    static func from(goal: UserGoal) -> OnboardingData {
+        let d = OnboardingData()
+        d.goalType      = goal.goalType
+        d.sex           = goal.sex
+        d.activityLevel = goal.activityLevel
+        d.pace          = goal.pace ?? .moderate
+        d.heightCm      = goal.heightCm ?? 170
+        d.weightKg      = goal.weightKg ?? 75
+        if let age = goal.age {
+            d.birthYear = Calendar.current.component(.year, from: Date()) - age
+        }
+        return d
     }
 }
