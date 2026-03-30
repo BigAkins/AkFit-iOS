@@ -28,7 +28,7 @@ struct BarcodeScannerView: View {
     /// recreated (new VC, new coordinator) so scanning resets after "Try again".
     @State private var scanAttempt: Int = 0
 
-    private let lookupService: any BarcodeLookupService = MockBarcodeLookupService()
+    private let lookupService: any BarcodeLookupService = OpenFoodFactsService()
 
     // MARK: - State
 
