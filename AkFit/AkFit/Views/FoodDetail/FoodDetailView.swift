@@ -125,6 +125,11 @@ struct FoodDetailView: View {
 
     private var servingSummary: String {
         if quantity == 1.0 { return "1 serving" }
+        // servingWeightG is 0 for foods reconstructed from FoodLog (gram weight
+        // not stored). Show just the serving count in that case.
+        guard food.servingWeightG > 0 else {
+            return "\(formatQuantity(quantity)) servings"
+        }
         let totalG = Int((food.servingWeightG * quantity).rounded())
         return "\(formatQuantity(quantity)) servings · \(totalG)g total"
     }

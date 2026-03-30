@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - FoodLog model
+
 /// A single persisted food log entry, mirroring the `food_logs` Supabase table.
 ///
 /// `calories` and macro gram fields are stored **pre-scaled** at log time
@@ -36,5 +38,34 @@ struct FoodLog: Identifiable, Codable, Sendable {
         case fatG         = "fat_g"
         case loggedAt     = "logged_at"
         case createdAt    = "created_at"
+    }
+}
+
+// MARK: - Re-log bridge
+
+extension FoodLog {
+    /// Reconstructs a `FoodItem` from this log entry so the existing
+    /// `FoodDetailView` can be used for quick re-logging.
+    ///
+    /// Macro values are back-calculated per serving by dividing the stored
+    /// pre-scaled values by `quantity` (e.g. `proteinG / quantity` gives
+    /// protein per one serving). This is always exact because `quantity > 0`
+    /// is enforced by the DB schema.
+    ///
+    /// `servingWeightG` is set to 0 — gram weight is not stored in `food_logs`.
+    /// `FoodDetailView` handles this gracefully by omitting the "· Xg total"
+    /// subtitle when `servingWeightG` is 0.
+    func asFoodItem() -> FoodItem {
+        FoodItem(
+            id:              UUID(),
+            name:            foodName,
+            brandOrCategory: nil,
+            servingSize:     servingLabel,
+            servingWeightG:  0,
+            calories:        Int((Double(calories) / quantity).rounded()),
+            proteinG:        proteinG / quantity,
+            carbsG:          carbsG   / quantity,
+            fatG:            fatG     / quantity
+        )
     }
 }

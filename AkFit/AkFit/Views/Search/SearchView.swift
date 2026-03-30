@@ -5,20 +5,27 @@ import SwiftUI
 /// Reachable directly via the Search tab or by tapping the dashboard FAB
 /// (which sets `AppRouter.selectedTab = .search`).
 ///
-/// Data is sourced from `FoodSearchService`. The current implementation uses
-/// a local mock dataset. Swap `searchService` for a Supabase or API-backed
-/// implementation when a real food database is available.
+/// **Empty state:** shows a "Recent" section (last 8 distinct foods logged,
+/// newest first) above a static "Common foods" fallback list. Recent foods
+/// are fetched from Supabase via `FoodLogStore.refreshRecents` on first appear
+/// and updated in memory after every successful log — no re-fetch needed.
 ///
-/// Tapping a result pushes `FoodDetailView` onto the `NavigationStack`,
-/// where the user adjusts quantity and taps "Log food" to persist the entry.
+/// **Search state:** results from `FoodSearchService` (currently mock).
+/// Swap `searchService` for a real implementation when a food database is ready.
+///
+/// Tapping any row pushes `FoodDetailView` where the user adjusts quantity
+/// and taps "Log food" to persist the entry.
 struct SearchView: View {
     @State private var query: String = ""
     @State private var results: [FoodItem] = []
     @State private var searchTask: Task<Void, Never>? = nil
 
+    @Environment(FoodLogStore.self) private var logStore
+    @Environment(AuthManager.self)  private var authManager
+
     private let searchService: any FoodSearchService = MockFoodSearchService()
 
-    /// A small hand-picked set shown when no query is typed.
+    /// Static fallback list shown below recents (or alone when recents are empty).
     private let suggestions: [FoodItem] = {
         let names: Set<String> = [
             "Chicken Breast, cooked", "Greek Yogurt, plain",
@@ -46,15 +53,30 @@ struct SearchView: View {
                 prompt: "Search food..."
             )
             .onChange(of: query) { performSearch() }
+            .task {
+                // Fetch recent foods when the Search tab first appears.
+                // After logging, FoodLogStore.insert keeps recentFoods in sync
+                // in memory so no re-fetch is needed for the same session.
+                if let userId = authManager.currentUserId {
+                    await logStore.refreshRecents(userId: userId)
+                }
+            }
         }
     }
 
     // MARK: - View states
 
     /// Shown when the search field is empty.
-    /// Displays common foods so the screen is immediately useful.
+    /// "Recent" section appears above "Common foods" when the user has prior logs.
     private var promptView: some View {
         List {
+            if !logStore.recentFoods.isEmpty {
+                Section("Recent") {
+                    ForEach(logStore.recentFoods) { log in
+                        foodLink(log.asFoodItem())
+                    }
+                }
+            }
             Section("Common foods") {
                 ForEach(suggestions) { food in
                     foodLink(food)
@@ -199,10 +221,29 @@ private struct MacroLine: View {
 
 // MARK: - Preview
 
-#Preview {
-    // FoodLogStore and AuthManager are required by FoodDetailView,
-    // which is pushed onto the NavigationStack when a result row is tapped.
+#Preview("No recents") {
     SearchView()
         .environment(FoodLogStore())
+        .environment(AuthManager(previewMode: true))
+}
+
+#Preview("With recents") {
+    let uid = UUID()
+    let recents: [FoodLog] = [
+        FoodLog(id: UUID(), userId: uid, foodName: "Chicken Breast, cooked",
+                servingLabel: "100g", quantity: 1.5,
+                calories: 248, proteinG: 46.5, carbsG: 0, fatG: 5.4,
+                loggedAt: Date(), createdAt: Date()),
+        FoodLog(id: UUID(), userId: uid, foodName: "Oats, rolled",
+                servingLabel: "40g (½ cup)", quantity: 1.0,
+                calories: 154, proteinG: 5.4, carbsG: 26, fatG: 2.8,
+                loggedAt: Date(), createdAt: Date()),
+        FoodLog(id: UUID(), userId: uid, foodName: "Whey Protein",
+                servingLabel: "1 scoop (30g)", quantity: 1.0,
+                calories: 120, proteinG: 24, carbsG: 3.0, fatG: 1.5,
+                loggedAt: Date(), createdAt: Date()),
+    ]
+    SearchView()
+        .environment(FoodLogStore(previewRecents: recents))
         .environment(AuthManager(previewMode: true))
 }

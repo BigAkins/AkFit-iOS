@@ -20,18 +20,22 @@ final class FoodLogStore {
     /// All confirmed food log entries for the current calendar day (device local time).
     private(set) var todayLogs: [FoodLog] = []
 
+    /// The most recently logged distinct foods across all days, newest first.
+    /// Deduplicated by `foodName` so each food appears at most once.
+    /// Populated by `refreshRecents`; updated in memory after each `insert`.
+    private(set) var recentFoods: [FoodLog] = []
+
     /// True while `refreshToday` is in flight. Use for subtle loading states.
     private(set) var isRefreshing: Bool = false
 
     // MARK: - Init
 
-    /// Production initializer — starts with an empty log list.
-    init() {}
-
-    /// Preview initializer — seeds `todayLogs` without any network call.
-    /// Only use inside `#Preview` blocks; production code always uses `init()`.
-    init(previewLogs: [FoodLog]) {
-        self.todayLogs = previewLogs
+    /// Default initializer — starts with empty state.
+    /// Also used as the preview initializer: pass `previewLogs` and/or
+    /// `previewRecents` in `#Preview` blocks to seed state without a network call.
+    init(previewLogs: [FoodLog] = [], previewRecents: [FoodLog] = []) {
+        self.todayLogs   = previewLogs
+        self.recentFoods = previewRecents
     }
 
     // MARK: - Fetch
@@ -63,11 +67,43 @@ final class FoodLogStore {
         }
     }
 
+    // MARK: - Fetch recents
+
+    /// Fetches the most recently logged distinct foods for `userId` across all days.
+    ///
+    /// Queries the last 30 entries by `logged_at` descending, then deduplicates
+    /// by `foodName` client-side (first occurrence = most recent per food).
+    /// The result is capped at 8 entries for a clean UI list.
+    ///
+    /// Errors are swallowed — `recentFoods` stays as-is on failure.
+    func refreshRecents(userId: UUID) async {
+        do {
+            let logs: [FoodLog] = try await SupabaseClientProvider.shared
+                .from("food_logs")
+                .select()
+                .eq("user_id", value: userId.uuidString)
+                .order("logged_at", ascending: false)
+                .limit(30)
+                .execute()
+                .value
+
+            // Array is newest-first; the first occurrence of each name is the
+            // most recent log for that food — exactly what we want.
+            var seen = Set<String>()
+            recentFoods = logs
+                .filter { seen.insert($0.foodName).inserted }
+                .prefix(8)
+                .map { $0 }
+        } catch {
+            // Non-fatal: recentFoods stays empty or stale.
+        }
+    }
+
     // MARK: - Insert
 
     /// Persists a food log entry to Supabase, then appends the confirmed row to
-    /// `todayLogs`. Throws on network or server errors so `FoodDetailView` can
-    /// surface feedback to the user.
+    /// `todayLogs` and prepends it to `recentFoods`. Both lists update immediately
+    /// so the dashboard and search screen re-render without an extra network round-trip.
     ///
     /// Scaled nutrition values are computed here so the DB row is self-contained:
     /// the dashboard reads them with a plain `SUM`, no further math required.
@@ -93,6 +129,14 @@ final class FoodLogStore {
             .value
 
         todayLogs.append(saved)
+
+        // Bubble the newly logged food to the top of recents, keeping the list
+        // deduplicated and capped at 8 so the search screen stays current.
+        var seen = Set<String>()
+        recentFoods = ([saved] + recentFoods)
+            .filter { seen.insert($0.foodName).inserted }
+            .prefix(8)
+            .map { $0 }
     }
 
     // MARK: - Delete
