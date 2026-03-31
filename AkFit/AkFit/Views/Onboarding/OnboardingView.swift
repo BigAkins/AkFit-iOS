@@ -1,5 +1,11 @@
+import OSLog
 import SwiftUI
 import Supabase
+
+private let onboardingLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "AkFit",
+    category: "Onboarding"
+)
 
 /// Multi-step onboarding flow.
 ///
@@ -513,18 +519,29 @@ private struct ResultsStepView: View {
             let out    = output,
             let input  = data.calculatorInput,
             let userId = authManager.currentUserId
-        else { return }
+        else {
+            onboardingLogger.error(
+                "save() guard failed — output:\(output != nil) input:\(data.calculatorInput != nil) userId:\(authManager.currentUserId != nil)"
+            )
+            if authManager.currentUserId == nil {
+                errorMessage = "Session expired. Please sign out and sign back in."
+            }
+            return
+        }
 
         isSaving = true
         errorMessage = nil
 
-        Task {
+        Task { @MainActor in
             defer { isSaving = false }
             do {
                 let profile = try await upsertProfile(userId: userId)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
+                onboardingLogger.error(
+                    "save() failed — \(String(describing: error), privacy: .public)"
+                )
                 errorMessage = "Couldn't save your targets. Please try again."
             }
         }

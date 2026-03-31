@@ -34,7 +34,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		61A1912F2F7921AE0061850D /* AkFit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AkFit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		61A1912F2F7921AE0061850D /* Ak-Fit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Ak-Fit.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A1913C2F7921AF0061850D /* AkFitTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AkFitTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A191462F7921AF0061850D /* AkFitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = AkFitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		61A191852F7930450061850D /* HealthKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = HealthKit.framework; path = System/Library/Frameworks/HealthKit.framework; sourceTree = SDKROOT; };
@@ -129,7 +129,7 @@
 		61A191302F7921AE0061850D /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				61A1912F2F7921AE0061850D /* AkFit.app */,
+				61A1912F2F7921AE0061850D /* Ak-Fit.app */,
 				61A1913C2F7921AF0061850D /* AkFitTests.xctest */,
 				61A191462F7921AF0061850D /* AkFitUITests.xctest */,
 			);
@@ -174,7 +174,7 @@
 				61A191832F7930450061850D /* Supabase */,
 			);
 			productName = AkFit;
-			productReference = 61A1912F2F7921AE0061850D /* AkFit.app */;
+			productReference = 61A1912F2F7921AE0061850D /* Ak-Fit.app */;
 			productType = "com.apple.product-type.application";
 		};
 		61A1913B2F7921AF0061850D /* AkFitTests */ = {
@@ -467,6 +467,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AkFit/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AkFit;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -478,7 +480,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.talktoem.AkFit;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Ak-Fit";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -501,6 +503,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AkFit/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = AkFit;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -512,7 +516,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = ai.talktoem.AkFit;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = "Ak-Fit";
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

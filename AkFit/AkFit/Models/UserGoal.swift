@@ -85,4 +85,41 @@ struct UserGoal: Codable, Identifiable, Sendable {
         case createdAt       = "created_at"
         case updatedAt       = "updated_at"
     }
+
+    // MARK: - Custom decoding
+
+    /// PostgREST serializes PostgreSQL `numeric` columns as JSON strings
+    /// (e.g. `"175.0"`) rather than JSON numbers, to preserve precision.
+    /// The default `JSONDecoder` cannot decode a string into `Double`, so
+    /// `height_cm` and `weight_kg` need a string-fallback path.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id             = try c.decode(UUID.self,           forKey: .id)
+        userId         = try c.decode(UUID.self,           forKey: .userId)
+        goalType       = try c.decode(GoalType.self,       forKey: .goalType)
+        targetCalories = try c.decode(Int.self,            forKey: .targetCalories)
+        targetProteinG = try c.decode(Int.self,            forKey: .targetProteinG)
+        targetCarbsG   = try c.decode(Int.self,            forKey: .targetCarbsG)
+        targetFatG     = try c.decode(Int.self,            forKey: .targetFatG)
+        heightCm       = Self.decodeFlexDouble(c, key: .heightCm)
+        weightKg       = Self.decodeFlexDouble(c, key: .weightKg)
+        age            = try c.decodeIfPresent(Int.self,           forKey: .age)
+        sex            = try c.decodeIfPresent(Sex.self,           forKey: .sex)
+        activityLevel  = try c.decodeIfPresent(ActivityLevel.self, forKey: .activityLevel)
+        pace           = try c.decodeIfPresent(Pace.self,          forKey: .pace)
+        isActive       = try c.decode(Bool.self,           forKey: .isActive)
+        createdAt      = try c.decode(Date.self,           forKey: .createdAt)
+        updatedAt      = try c.decode(Date.self,           forKey: .updatedAt)
+    }
+
+    /// Decodes a `numeric` column that PostgREST may return as a JSON string
+    /// ("175.0") or a JSON number (175.0). Returns `nil` when the key is absent.
+    private static func decodeFlexDouble(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Double? {
+        if let d = try? container.decodeIfPresent(Double.self, forKey: key) { return d }
+        if let s = try? container.decodeIfPresent(String.self, forKey: key) { return Double(s) }
+        return nil
+    }
 }
