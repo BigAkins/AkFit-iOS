@@ -6,6 +6,8 @@
 	<string>AkFit</string>
 	<key>NSCameraUsageDescription</key>
 	<string>AkFit uses the camera to scan food barcodes so you can log nutrition quickly and accurately.</string>
+	<key>NSHealthShareUsageDescription</key>
+	<string>AkFit does not read health data. This app only writes nutrition and bodyweight entries to Apple Health.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>AkFit exports your food logs and bodyweight entries to Apple Health so you can track nutrition and weight trends in one place.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
