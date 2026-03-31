@@ -140,17 +140,16 @@ final class AuthManager {
     private func fetchActiveGoal(userId: UUID) async -> UserGoal? {
         do {
             return try await SupabaseClientProvider.shared
-                .from("user_goals")
+                .from("goals")
                 .select()
                 .eq("user_id", value: userId.uuidString)
-                .eq("is_active", value: true)
                 .order("created_at", ascending: false)
                 .limit(1)
                 .single()
                 .execute()
                 .value
         } catch {
-            // No active goal row = not yet onboarded. Expected for new users.
+            // No goal row = not yet onboarded. Expected for new users.
             return nil
         }
     }
@@ -207,5 +206,10 @@ final class AuthManager {
     /// immediately reflect the new targets without a full re-fetch.
     func updateGoal(_ goal: UserGoal) {
         self.goal = goal
+    }
+
+    /// Called after body-stat edits to keep the in-memory profile in sync.
+    func updateProfile(_ profile: UserProfile) {
+        self.profile = profile
     }
 }

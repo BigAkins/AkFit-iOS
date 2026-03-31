@@ -75,27 +75,30 @@ final class OnboardingData {
 // MARK: - Settings pre-population
 
 extension OnboardingData {
-    /// Builds an `OnboardingData` pre-populated from a saved `UserGoal`.
+    /// Builds an `OnboardingData` pre-populated from a saved `UserGoal` and
+    /// the user's `UserProfile`.
     ///
-    /// Used by `EditGoalView` to seed the edit form with the user's current
-    /// goal inputs. Converts the stored metric values to U.S. display units.
-    static func from(goal: UserGoal) -> OnboardingData {
+    /// - Goal parameters (goalType, targetPace) come from `goal`.
+    /// - Body stats (height, weight, birthYear) come from `profile`.
+    /// - Sex and activity level are not stored in the current schema; they will
+    ///   be nil and must be re-selected by the user in edit flows.
+    static func from(goal: UserGoal, profile: UserProfile? = nil) -> OnboardingData {
         let d = OnboardingData()
-        d.goalType      = goal.goalType
-        d.sex           = goal.sex
-        d.activityLevel = goal.activityLevel
-        d.pace          = goal.pace ?? .moderate
+        d.goalType = goal.goalType
+        d.pace     = goal.targetPace ?? .moderate
 
-        if let cm = goal.heightCm {
-            let (ft, ins) = cmToFeetInches(cm)
-            d.heightFeet   = ft
-            d.heightInches = ins
-        }
-        if let kg = goal.weightKg {
-            d.weightLbs = kgToLbs(kg)
-        }
-        if let age = goal.age {
-            d.birthYear = Calendar.current.component(.year, from: Date()) - age
+        if let profile {
+            if let cm = profile.heightCm {
+                let (ft, ins) = cmToFeetInches(cm)
+                d.heightFeet   = ft
+                d.heightInches = ins
+            }
+            if let kg = profile.weightKg {
+                d.weightLbs = kgToLbs(kg)
+            }
+            if let year = profile.birthYear {
+                d.birthYear = year
+            }
         }
         return d
     }

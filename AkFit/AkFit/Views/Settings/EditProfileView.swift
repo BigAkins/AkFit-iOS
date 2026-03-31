@@ -3,18 +3,15 @@ import Supabase
 
 /// Sheet for editing the user's body stats: height, weight, birth year, and sex.
 ///
-/// Presented from `SettingsView` via the "Edit Profile" row. Intentionally
-/// scoped to body stats only — goal type, activity level, and pace are edited
-/// separately via `EditGoalView`.
+/// Presented from `SettingsView` via the "Edit Profile" row.
 ///
-/// **Live preview:** the calorie and macro numbers at the top update as the
-/// user changes any stat, so they see the recalculated targets before saving.
-///
-/// **Persistence:** PATCHes the existing `user_goals` row in place (same
-/// mechanism as `EditGoalView`). Goal type, activity level, and pace are
-/// carried through unchanged from the current goal.
+/// **Persistence:**
+/// - Upserts the `profiles` row with updated body stats.
+/// - PATCHes the `goals` row with recalculated daily macro targets so the
+///   dashboard immediately reflects the change.
 struct EditProfileView: View {
     let goal: UserGoal
+    let profile: UserProfile?
 
     @Environment(AuthManager.self) private var authManager
     @Environment(\.dismiss)        private var dismiss
@@ -28,9 +25,10 @@ struct EditProfileView: View {
         from: currentYear - 80, through: currentYear - 15, by: 1
     ))
 
-    init(goal: UserGoal) {
-        self.goal = goal
-        _draft = State(initialValue: OnboardingData.from(goal: goal))
+    init(goal: UserGoal, profile: UserProfile? = nil) {
+        self.goal    = goal
+        self.profile = profile
+        _draft = State(initialValue: OnboardingData.from(goal: goal, profile: profile))
     }
 
     // MARK: - Derived
@@ -39,7 +37,6 @@ struct EditProfileView: View {
         draft.calculatorInput.map { MacroCalculator.calculate($0) }
     }
 
-    /// Unified feet+inches as a single integer for a single Stepper control.
     private var totalInchesBinding: Binding<Int> {
         Binding(
             get: { draft.heightFeet * 12 + draft.heightInches },
@@ -56,7 +53,6 @@ struct EditProfileView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // Live target preview — shows what the new targets will be.
                 if let out = calculated {
                     Section {
                         targetPreview(out)
@@ -65,7 +61,6 @@ struct EditProfileView: View {
                     }
                 }
 
-                // Body stats — the only editable fields in this sheet.
                 Section {
                     Stepper(
                         "Weight: \(draft.weightLbs) lbs",
@@ -171,8 +166,12 @@ struct EditProfileView: View {
         Task {
             defer { isSaving = false }
             do {
-                let updated = try await patchGoal(userId: userId, input: input, out: out)
-                authManager.updateGoal(updated)
+                // Update body stats in profiles.
+                let updatedProfile = try await upsertProfile(userId: userId, input: input)
+                // Recalculate and update macro targets in goals.
+                let updatedGoal    = try await patchGoal(userId: userId, input: input, out: out)
+                authManager.updateProfile(updatedProfile)
+                authManager.updateGoal(updatedGoal)
                 dismiss()
             } catch {
                 saveError = "Couldn't save changes. Please try again."
@@ -180,30 +179,53 @@ struct EditProfileView: View {
         }
     }
 
-    /// PATCHes the user's active goal row with updated body stats and
-    /// recalculated macro targets. Goal type, activity level, and pace are
-    /// carried through unchanged from the current goal.
-    private func patchGoal(
-        userId: UUID,
-        input: MacroCalculator.Input,
-        out:   MacroCalculator.Output
-    ) async throws -> UserGoal {
-        let payload = ProfileUpdate(
-            goalType:        input.goalType.rawValue,
-            targetCalories:  out.calories,
-            targetProteinG:  out.proteinG,
-            targetCarbsG:    out.carbsG,
-            targetFatG:      out.fatG,
-            heightCm:        Int(input.heightCm.rounded()),
-            weightKg:        Int(input.weightKg.rounded()),
-            age:             input.age,
-            sex:             input.sex.rawValue,
-            activityLevel:   input.activityLevel.rawValue,
-            pace:            input.pace.rawValue,
-            updatedAt:       Date()
+    /// Upserts the `profiles` row with updated body stats.
+    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
+        struct ProfileUpsert: Encodable {
+            let id:         UUID
+            let height_cm:  Int
+            let weight_kg:  Int
+            let birthdate:  String
+            let updated_at: Date
+        }
+        let row = ProfileUpsert(
+            id:         userId,
+            height_cm:  Int(input.heightCm.rounded()),
+            weight_kg:  Int(input.weightKg.rounded()),
+            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            updated_at: Date()
         )
         return try await SupabaseClientProvider.shared
-            .from("user_goals")
+            .from("profiles")
+            .upsert(row, onConflict: "id")
+            .select()
+            .single()
+            .execute()
+            .value
+    }
+
+    /// PATCHes the `goals` row with recalculated daily targets.
+    private func patchGoal(
+        userId: UUID,
+        input:  MacroCalculator.Input,
+        out:    MacroCalculator.Output
+    ) async throws -> UserGoal {
+        struct GoalPatch: Encodable {
+            let daily_calories: Int
+            let daily_protein:  Int
+            let daily_carbs:    Int
+            let daily_fat:      Int
+            let updated_at:     Date
+        }
+        let payload = GoalPatch(
+            daily_calories: out.calories,
+            daily_protein:  out.proteinG,
+            daily_carbs:    out.carbsG,
+            daily_fat:      out.fatG,
+            updated_at:     Date()
+        )
+        return try await SupabaseClientProvider.shared
+            .from("goals")
             .update(payload)
             .eq("id",      value: goal.id.uuidString)
             .eq("user_id", value: userId.uuidString)
@@ -214,49 +236,23 @@ struct EditProfileView: View {
     }
 }
 
-// MARK: - Update payload
-
-private struct ProfileUpdate: Encodable {
-    let goalType:       String
-    let targetCalories: Int
-    let targetProteinG: Int
-    let targetCarbsG:   Int
-    let targetFatG:     Int
-    let heightCm:       Int
-    let weightKg:       Int
-    let age:            Int
-    let sex:            String
-    let activityLevel:  String
-    let pace:           String
-    let updatedAt:      Date
-
-    enum CodingKeys: String, CodingKey {
-        case goalType       = "goal_type"
-        case targetCalories = "target_calories"
-        case targetProteinG = "target_protein_g"
-        case targetCarbsG   = "target_carbs_g"
-        case targetFatG     = "target_fat_g"
-        case heightCm       = "height_cm"
-        case weightKg       = "weight_kg"
-        case age
-        case sex
-        case activityLevel  = "activity_level"
-        case pace
-        case updatedAt      = "updated_at"
-    }
-}
-
 // MARK: - Preview
 
 #Preview {
-    EditProfileView(goal: UserGoal(
-        id: UUID(), userId: UUID(),
-        goalType: .fatLoss,
-        targetCalories: 2100, targetProteinG: 165,
-        targetCarbsG: 220, targetFatG: 65,
-        heightCm: 178, weightKg: 82, age: 32, sex: .male,
-        activityLevel: .moderate, pace: .moderate,
-        isActive: true, createdAt: Date(), updatedAt: Date()
-    ))
+    EditProfileView(
+        goal: UserGoal(
+            id: UUID(), userId: UUID(),
+            goalType: .fatLoss,
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: 2100, dailyProtein: 165,
+            dailyCarbs: 220, dailyFat: 65,
+            createdAt: Date(), updatedAt: Date()
+        ),
+        profile: UserProfile(
+            id: UUID(), displayName: nil,
+            heightCm: 178, weightKg: 82, birthdate: "1992-01-01",
+            createdAt: Date(), updatedAt: Date()
+        )
+    )
     .environment(AuthManager(previewMode: true))
 }

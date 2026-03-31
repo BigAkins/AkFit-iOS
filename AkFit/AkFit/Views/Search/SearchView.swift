@@ -537,13 +537,16 @@ private extension SearchView {
         auth.markOnboarded(
             goal: UserGoal(
                 id: UUID(), userId: uid, goalType: .fatLoss,
-                targetCalories: 2100, targetProteinG: 165,
-                targetCarbsG: 220,    targetFatG: 65,
-                heightCm: nil, weightKg: nil, age: nil, sex: nil,
-                activityLevel: nil, pace: nil,
-                isActive: true, createdAt: Date(), updatedAt: Date()
+                targetWeight: nil, targetPace: .moderate,
+                dailyCalories: 2100, dailyProtein: 165,
+                dailyCarbs: 220, dailyFat: 65,
+                createdAt: Date(), updatedAt: Date()
             ),
-            profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+            profile: UserProfile(
+                id: UUID(), displayName: nil,
+                heightCm: nil, weightKg: nil, birthdate: nil,
+                createdAt: Date(), updatedAt: Date()
+            )
         )
         return auth
     }

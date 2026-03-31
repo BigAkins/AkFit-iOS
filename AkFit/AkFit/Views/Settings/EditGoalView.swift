@@ -4,19 +4,17 @@ import Supabase
 /// Sheet for editing the user's calorie and macro targets.
 ///
 /// Presented from `SettingsView`. Pre-populates from the current active
-/// `UserGoal` using `OnboardingData.from(goal:)`.
+/// `UserGoal` and `UserProfile` using `OnboardingData.from(goal:profile:)`.
 ///
 /// **Live preview:** the calorie and macro numbers at the top of the form
 /// update as the user changes any input — they see exactly what their new
 /// targets will be before committing.
 ///
-/// **Persistence:** on "Save", PATCHes the existing `user_goals` row in
-/// place (no new row inserted). The existing `user_goals: update own` RLS
-/// policy covers this operation. After a successful save, calls
-/// `authManager.updateGoal(_:)` so all views reflect the new targets
-/// immediately without a refetch.
+/// **Persistence:** PATCHes the existing `goals` row in place (no new row
+/// inserted), then upserts the `profiles` row with updated body stats.
 struct EditGoalView: View {
     let goal: UserGoal
+    let profile: UserProfile?
 
     @Environment(AuthManager.self) private var authManager
     @Environment(\.dismiss)        private var dismiss
@@ -31,9 +29,10 @@ struct EditGoalView: View {
         from: currentYear - 80, through: currentYear - 15, by: 1
     ))
 
-    init(goal: UserGoal) {
-        self.goal  = goal
-        _draft = State(initialValue: OnboardingData.from(goal: goal))
+    init(goal: UserGoal, profile: UserProfile? = nil) {
+        self.goal    = goal
+        self.profile = profile
+        _draft = State(initialValue: OnboardingData.from(goal: goal, profile: profile))
     }
 
     // MARK: - Derived
@@ -42,9 +41,6 @@ struct EditGoalView: View {
         draft.calculatorInput.map { MacroCalculator.calculate($0) }
     }
 
-    /// A binding to total height expressed as a single integer number of inches
-    /// (feet × 12 + inches). The Stepper advances 1 inch per tap and the
-    /// setter automatically carries over between the feet and inches components.
     private var totalInchesBinding: Binding<Int> {
         Binding(
             get: { draft.heightFeet * 12 + draft.heightInches },
@@ -62,8 +58,6 @@ struct EditGoalView: View {
         NavigationStack {
             Form {
                 // ── Live target preview ──────────────────────────────────
-                // Updates as the user changes any input — they see exactly
-                // what their daily targets will be before hitting Save.
                 if let out = calculated {
                     Section {
                         targetPreview(out)
@@ -80,7 +74,6 @@ struct EditGoalView: View {
                         Text("Lean Bulk")  .tag(Optional(UserGoal.GoalType.leanBulk))
                     }
                     .onChange(of: draft.goalType) { _, newValue in
-                        // Keep OnboardingData consistent: pace is irrelevant for maintenance.
                         if newValue == .maintenance { draft.pace = .moderate }
                     }
 
@@ -103,19 +96,16 @@ struct EditGoalView: View {
 
                 // ── Body stats ───────────────────────────────────────────
                 Section("Body stats") {
-                    // Weight in pounds — 1 lb step.
                     Stepper(
                         "Weight: \(draft.weightLbs) lbs",
                         value: $draft.weightLbs,
                         in: 66...440,
                         step: 1
                     )
-                    // Height as a single stepper that advances 1 inch at a time,
-                    // carrying over automatically between feet and inches.
                     Stepper(
                         "Height: \(draft.heightFeet)′ \(draft.heightInches)″",
                         value: totalInchesBinding,
-                        in: 48...95,   // 4′ 0″ = 48 in … 7′ 11″ = 95 in
+                        in: 48...95,
                         step: 1
                     )
                     Picker("Born in", selection: $draft.birthYear) {
@@ -207,8 +197,12 @@ struct EditGoalView: View {
         Task {
             defer { isSaving = false }
             do {
+                // Patch the goal row with updated targets.
                 let updated = try await patchGoal(userId: userId, input: input, out: out)
+                // Upsert profile with updated body stats.
+                let updatedProfile = try await upsertProfile(userId: userId, input: input)
                 authManager.updateGoal(updated)
+                authManager.updateProfile(updatedProfile)
                 dismiss()
             } catch {
                 saveError = "Couldn't save changes. Please try again."
@@ -216,32 +210,23 @@ struct EditGoalView: View {
         }
     }
 
-    /// PATCHes the user's active goal row in `user_goals`.
-    ///
-    /// The `user_goals: update own` RLS policy (using `auth.uid() = user_id`)
-    /// covers this operation — no additional policy is needed.
-    /// The `.eq("user_id", ...)` clause is a belt-and-suspenders guard on top of RLS.
+    /// PATCHes the user's active goal row in `goals`.
     private func patchGoal(
         userId: UUID,
         input: MacroCalculator.Input,
         out:   MacroCalculator.Output
     ) async throws -> UserGoal {
         let payload = GoalUpdate(
-            goalType:        input.goalType.rawValue,
-            targetCalories:  out.calories,
-            targetProteinG:  out.proteinG,
-            targetCarbsG:    out.carbsG,
-            targetFatG:      out.fatG,
-            heightCm:        Int(input.heightCm.rounded()),
-            weightKg:        Int(input.weightKg.rounded()),
-            age:             input.age,
-            sex:             input.sex.rawValue,
-            activityLevel:   input.activityLevel.rawValue,
-            pace:            input.pace.rawValue,
-            updatedAt:       Date()
+            goalType:      input.goalType.rawValue,
+            targetPace:    input.pace.rawValue,
+            dailyCalories: out.calories,
+            dailyProtein:  out.proteinG,
+            dailyCarbs:    out.carbsG,
+            dailyFat:      out.fatG,
+            updatedAt:     Date()
         )
         return try await SupabaseClientProvider.shared
-            .from("user_goals")
+            .from("goals")
             .update(payload)
             .eq("id",      value: goal.id.uuidString)
             .eq("user_id", value: userId.uuidString)
@@ -250,54 +235,73 @@ struct EditGoalView: View {
             .execute()
             .value
     }
+
+    /// Upserts the `profiles` row with updated body stats.
+    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
+        struct ProfileUpdate: Encodable {
+            let id:         UUID
+            let height_cm:  Int
+            let weight_kg:  Int
+            let birthdate:  String
+            let updated_at: Date
+        }
+        let row = ProfileUpdate(
+            id:         userId,
+            height_cm:  Int(input.heightCm.rounded()),
+            weight_kg:  Int(input.weightKg.rounded()),
+            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            updated_at: Date()
+        )
+        return try await SupabaseClientProvider.shared
+            .from("profiles")
+            .upsert(row, onConflict: "id")
+            .select()
+            .single()
+            .execute()
+            .value
+    }
 }
 
-// MARK: - Update payload
+// MARK: - Goal update payload
 
-/// Encodable payload for PATCHing a `user_goals` row.
-/// Excludes `id`, `user_id`, `is_active`, and `created_at` — those are immutable
-/// for an in-place goal update.
+/// Encodable payload for PATCHing a `goals` row.
 private struct GoalUpdate: Encodable {
-    let goalType:       String
-    let targetCalories: Int
-    let targetProteinG: Int
-    let targetCarbsG:   Int
-    let targetFatG:     Int
-    let heightCm:       Int
-    let weightKg:       Int
-    let age:            Int
-    let sex:            String
-    let activityLevel:  String
-    let pace:           String
-    let updatedAt:      Date
+    let goalType:      String
+    let targetPace:    String
+    let dailyCalories: Int
+    let dailyProtein:  Int
+    let dailyCarbs:    Int
+    let dailyFat:      Int
+    let updatedAt:     Date
 
     enum CodingKeys: String, CodingKey {
-        case goalType       = "goal_type"
-        case targetCalories = "target_calories"
-        case targetProteinG = "target_protein_g"
-        case targetCarbsG   = "target_carbs_g"
-        case targetFatG     = "target_fat_g"
-        case heightCm       = "height_cm"
-        case weightKg       = "weight_kg"
-        case age
-        case sex
-        case activityLevel  = "activity_level"
-        case pace
-        case updatedAt      = "updated_at"
+        case goalType      = "goal_type"
+        case targetPace    = "target_pace"
+        case dailyCalories = "daily_calories"
+        case dailyProtein  = "daily_protein"
+        case dailyCarbs    = "daily_carbs"
+        case dailyFat      = "daily_fat"
+        case updatedAt     = "updated_at"
     }
 }
 
 // MARK: - Preview
 
 #Preview {
-    EditGoalView(goal: UserGoal(
-        id: UUID(), userId: UUID(),
-        goalType: .fatLoss,
-        targetCalories: 2100, targetProteinG: 165,
-        targetCarbsG: 220,   targetFatG: 65,
-        heightCm: 178, weightKg: 82, age: 32, sex: .male,
-        activityLevel: .moderate, pace: .moderate,
-        isActive: true, createdAt: Date(), updatedAt: Date()
-    ))
+    EditGoalView(
+        goal: UserGoal(
+            id: UUID(), userId: UUID(),
+            goalType: .fatLoss,
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: 2100, dailyProtein: 165,
+            dailyCarbs: 220, dailyFat: 65,
+            createdAt: Date(), updatedAt: Date()
+        ),
+        profile: UserProfile(
+            id: UUID(), displayName: nil,
+            heightCm: 178, weightKg: 82, birthdate: "1992-01-01",
+            createdAt: Date(), updatedAt: Date()
+        )
+    )
     .environment(AuthManager(previewMode: true))
 }

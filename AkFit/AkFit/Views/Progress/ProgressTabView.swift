@@ -35,7 +35,7 @@ struct ProgressTabView: View {
     /// Upper bound for the chart Y-axis. Always tall enough to show the target
     /// line even if all bars are 0 (e.g. on first load or a fresh account).
     private var yMax: Double {
-        let targetCal  = Double(authManager.goal?.targetCalories ?? 2000)
+        let targetCal  = Double(authManager.goal?.dailyCalories ?? 2000)
         let maxLogged  = weekProgress.map { Double($0.totalCalories) }.max() ?? 0
         return max(targetCal, maxLogged) * 1.25
     }
@@ -76,7 +76,7 @@ struct ProgressTabView: View {
     private var logSheetInitialLbs: Int {
         if let lbs = todayWeightLbs       { return Int(lbs.rounded()) }
         if let last = weightEntries.last  { return Int(last.lbs.rounded()) }
-        if let kg   = authManager.goal?.weightKg { return OnboardingData.kgToLbs(kg) }
+        if let kg   = authManager.profile?.weightKg { return OnboardingData.kgToLbs(kg) }
         return 150
     }
 
@@ -129,7 +129,7 @@ struct ProgressTabView: View {
                     .cornerRadius(4)
                 }
 
-                if let target = authManager.goal?.targetCalories {
+                if let target = authManager.goal?.dailyCalories {
                     RuleMark(y: .value("Target", target))
                         .foregroundStyle(Color.red.opacity(0.40))
                         .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
@@ -208,11 +208,11 @@ struct ProgressTabView: View {
 
             HStack(spacing: 10) {
                 macroCard("Protein", consumed: day.totalProteinG,
-                          target: authManager.goal?.targetProteinG, color: .red)
+                          target: authManager.goal?.dailyProtein, color: .red)
                 macroCard("Carbs",   consumed: day.totalCarbsG,
-                          target: authManager.goal?.targetCarbsG,   color: .orange)
+                          target: authManager.goal?.dailyCarbs,   color: .orange)
                 macroCard("Fat",     consumed: day.totalFatG,
-                          target: authManager.goal?.targetFatG,     color: .blue)
+                          target: authManager.goal?.dailyFat,     color: .blue)
             }
         }
     }
@@ -220,7 +220,7 @@ struct ProgressTabView: View {
     // MARK: - Calorie detail card
 
     private func calorieDetailCard(for day: DayProgress) -> some View {
-        let target   = authManager.goal?.targetCalories ?? 0
+        let target   = authManager.goal?.dailyCalories ?? 0
         let consumed = day.totalCalories
         let progress = target > 0 ? min(1.0, Double(consumed) / Double(target)) : 0.0
 
@@ -606,13 +606,16 @@ private extension ProgressTabView {
             goal: UserGoal(
                 id: UUID(), userId: UUID(),
                 goalType: .fatLoss,
-                targetCalories: 2100, targetProteinG: 165,
-                targetCarbsG: 220,   targetFatG: 65,
-                heightCm: 178, weightKg: 75, age: 30, sex: .male,
-                activityLevel: .moderate, pace: .moderate,
-                isActive: true, createdAt: Date(), updatedAt: Date()
+                targetWeight: nil, targetPace: .moderate,
+                dailyCalories: 2100, dailyProtein: 165,
+                dailyCarbs: 220, dailyFat: 65,
+                createdAt: Date(), updatedAt: Date()
             ),
-            profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+            profile: UserProfile(
+                id: UUID(), displayName: nil,
+                heightCm: 178, weightKg: 75, birthdate: "1994-01-01",
+                createdAt: Date(), updatedAt: Date()
+            )
         )
         return auth
     }

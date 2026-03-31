@@ -4,7 +4,7 @@ import Foundation
 
 /// A single persisted bodyweight entry, mirroring the `bodyweight_logs` Supabase table.
 ///
-/// Weights are stored in kilograms for internal consistency with `UserGoal.weightKg`
+/// Weights are stored in kilograms for internal consistency with `UserProfile.weightKg`
 /// and `OnboardingData.weightKg`. The `weightLbs` computed property converts to
 /// pounds for display — the app is US-first but storage stays metric.
 struct BodyweightLog: Identifiable, Codable, Sendable {

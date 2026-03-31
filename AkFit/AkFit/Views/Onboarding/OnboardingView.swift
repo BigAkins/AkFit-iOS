@@ -535,7 +535,7 @@ private struct ResultsStepView: View {
         Task { @MainActor in
             defer { isSaving = false }
             do {
-                let profile = try await upsertProfile(userId: userId)
+                let profile = try await upsertProfile(userId: userId, input: input)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
@@ -547,11 +547,26 @@ private struct ResultsStepView: View {
         }
     }
 
-    private func upsertProfile(userId: UUID) async throws -> UserProfile {
-        struct ProfileInsert: Encodable { let id: UUID }
+    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
+        struct ProfileInsert: Encodable {
+            let id: UUID
+            let height_cm: Int
+            let weight_kg: Int
+            let birthdate: String   // "YYYY-01-01" — we collect birth year, not exact date
+            let updated_at: Date
+        }
+        let row = ProfileInsert(
+            id:         userId,
+            height_cm:  Int(input.heightCm.rounded()),
+            weight_kg:  Int(input.weightKg.rounded()),
+            // Construct a date string from birth year. Jan 1 is used as a proxy
+            // since we only collect the year during onboarding.
+            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            updated_at: Date()
+        )
         return try await SupabaseClientProvider.shared
             .from("profiles")
-            .upsert(ProfileInsert(id: userId), onConflict: "id")
+            .upsert(row, onConflict: "id")
             .select()
             .single()
             .execute()
@@ -564,38 +579,25 @@ private struct ResultsStepView: View {
         out: MacroCalculator.Output
     ) async throws -> UserGoal {
         struct GoalInsert: Encodable {
-            let user_id: UUID
-            let goal_type: String
-            let target_calories: Int
-            let target_protein_g: Int
-            let target_carbs_g: Int
-            let target_fat_g: Int
-            let height_cm: Int
-            let weight_kg: Int
-            let age: Int
-            let sex: String
-            let activity_level: String
-            let pace: String
-            let is_active: Bool
+            let user_id:        UUID
+            let goal_type:      String
+            let target_pace:    String
+            let daily_calories: Int
+            let daily_protein:  Int
+            let daily_carbs:    Int
+            let daily_fat:      Int
         }
         let row = GoalInsert(
-            user_id:          userId,
-            goal_type:        input.goalType.rawValue,
-            target_calories:  out.calories,
-            target_protein_g: out.proteinG,
-            target_carbs_g:   out.carbsG,
-            target_fat_g:     out.fatG,
-            // Rounded to nearest integer — picker uses 1-unit steps.
-            height_cm:        Int(input.heightCm.rounded()),
-            weight_kg:        Int(input.weightKg.rounded()),
-            age:              input.age,
-            sex:              input.sex.rawValue,
-            activity_level:   input.activityLevel.rawValue,
-            pace:             input.pace.rawValue,
-            is_active:        true
+            user_id:        userId,
+            goal_type:      input.goalType.rawValue,
+            target_pace:    input.pace.rawValue,
+            daily_calories: out.calories,
+            daily_protein:  out.proteinG,
+            daily_carbs:    out.carbsG,
+            daily_fat:      out.fatG
         )
         return try await SupabaseClientProvider.shared
-            .from("user_goals")
+            .from("goals")
             .insert(row)
             .select()
             .single()

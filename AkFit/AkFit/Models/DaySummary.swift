@@ -39,10 +39,10 @@ struct DaySummary {
 
     static func from(goal: UserGoal) -> DaySummary {
         DaySummary(
-            targetCalories: goal.targetCalories,
-            targetProteinG: goal.targetProteinG,
-            targetCarbsG:   goal.targetCarbsG,
-            targetFatG:     goal.targetFatG
+            targetCalories: goal.dailyCalories,
+            targetProteinG: goal.dailyProtein,
+            targetCarbsG:   goal.dailyCarbs,
+            targetFatG:     goal.dailyFat
         )
     }
 

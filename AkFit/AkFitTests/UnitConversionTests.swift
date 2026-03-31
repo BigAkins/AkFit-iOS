@@ -92,20 +92,23 @@ struct UnitConversionTests {
         #expect(abs(data.weightKg -  75) < 1.0)
     }
 
-    // MARK: - from(goal:) pre-population
+    // MARK: - from(goal:profile:) pre-population
 
     @Test func fromGoal_convertsMetricToUS() {
         let goal = UserGoal(
             id: UUID(), userId: UUID(),
             goalType: .fatLoss,
-            targetCalories: 2100, targetProteinG: 165,
-            targetCarbsG: 220, targetFatG: 65,
-            heightCm: 182.88, weightKg: 82,
-            age: 32, sex: .male,
-            activityLevel: .moderate, pace: .moderate,
-            isActive: true, createdAt: .now, updatedAt: .now
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: 2100, dailyProtein: 165,
+            dailyCarbs: 220, dailyFat: 65,
+            createdAt: .now, updatedAt: .now
         )
-        let data = OnboardingData.from(goal: goal)
+        let profile = UserProfile(
+            id: UUID(), displayName: nil,
+            heightCm: 182.88, weightKg: 82,
+            birthdate: nil, createdAt: .now, updatedAt: .now
+        )
+        let data = OnboardingData.from(goal: goal, profile: profile)
 
         // 182.88 cm → 6′ 0″
         #expect(data.heightFeet   == 6)

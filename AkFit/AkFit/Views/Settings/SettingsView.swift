@@ -44,13 +44,13 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .sheet(isPresented: $showEditGoal) {
                 if let goal = authManager.goal {
-                    EditGoalView(goal: goal)
+                    EditGoalView(goal: goal, profile: authManager.profile)
                         .environment(authManager)
                 }
             }
             .sheet(isPresented: $showEditProfile) {
                 if let goal = authManager.goal {
-                    EditProfileView(goal: goal)
+                    EditProfileView(goal: goal, profile: authManager.profile)
                         .environment(authManager)
                 }
             }
@@ -107,18 +107,15 @@ struct SettingsView: View {
 
     private var profileSection: some View {
         Section {
-            if let goal = authManager.goal {
-                if let age = goal.age {
+            if let profile = authManager.profile {
+                if let age = profile.age {
                     LabeledContent("Age", value: "\(age)")
                 }
-                if let cm = goal.heightCm {
+                if let cm = profile.heightCm {
                     LabeledContent("Height", value: formattedHeight(cm))
                 }
-                if let kg = goal.weightKg {
+                if let kg = profile.weightKg {
                     LabeledContent("Weight", value: formattedWeight(kg))
-                }
-                if let sex = goal.sex {
-                    LabeledContent("Sex", value: sex == .male ? "Male" : "Female")
                 }
                 Button {
                     showEditProfile = true
@@ -145,7 +142,7 @@ struct SettingsView: View {
             if let goal = authManager.goal {
                 // Calories — primary metric, no color accent.
                 LabeledContent {
-                    Text("\(goal.targetCalories) kcal")
+                    Text("\(goal.dailyCalories) kcal")
                         .monospacedDigit()
                 } label: {
                     Text("Calories")
@@ -153,7 +150,7 @@ struct SettingsView: View {
 
                 // Macros — color-coded to match the dashboard and food log rows.
                 LabeledContent {
-                    Text("\(goal.targetProteinG)g")
+                    Text("\(goal.dailyProtein)g")
                         .monospacedDigit()
                         .fontWeight(.medium)
                         .foregroundStyle(.red)
@@ -162,7 +159,7 @@ struct SettingsView: View {
                 }
 
                 LabeledContent {
-                    Text("\(goal.targetCarbsG)g")
+                    Text("\(goal.dailyCarbs)g")
                         .monospacedDigit()
                         .fontWeight(.medium)
                         .foregroundStyle(.orange)
@@ -171,7 +168,7 @@ struct SettingsView: View {
                 }
 
                 LabeledContent {
-                    Text("\(goal.targetFatG)g")
+                    Text("\(goal.dailyFat)g")
                         .monospacedDigit()
                         .fontWeight(.medium)
                         .foregroundStyle(.blue)
@@ -365,7 +362,7 @@ struct SettingsView: View {
     /// verbose for a settings label.)
     private func goalContext(_ goal: UserGoal) -> String {
         if goal.goalType == .maintenance { return goal.goalType.displayName }
-        let paceName: String? = goal.pace.map {
+        let paceName: String? = goal.targetPace.map {
             switch $0 {
             case .slow:     "Slow"
             case .moderate: "Moderate"
@@ -410,13 +407,16 @@ struct SettingsView: View {
         goal: UserGoal(
             id: UUID(), userId: UUID(),
             goalType: .fatLoss,
-            targetCalories: 2100, targetProteinG: 165,
-            targetCarbsG: 220,   targetFatG: 65,
-            heightCm: 178, weightKg: 82, age: 32, sex: .male,
-            activityLevel: .moderate, pace: .moderate,
-            isActive: true, createdAt: Date(), updatedAt: Date()
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: 2100, dailyProtein: 165,
+            dailyCarbs: 220, dailyFat: 65,
+            createdAt: Date(), updatedAt: Date()
         ),
-        profile: UserProfile(id: UUID(), displayName: nil, createdAt: Date())
+        profile: UserProfile(
+            id: UUID(), displayName: nil,
+            heightCm: 178, weightKg: 82, birthdate: "1992-01-01",
+            createdAt: Date(), updatedAt: Date()
+        )
     )
     return SettingsView()
         .environment(auth)

@@ -3,11 +3,68 @@ import Foundation
 struct UserProfile: Codable, Identifiable, Sendable {
     let id: UUID
     var displayName: String?
+    /// Height in centimetres. Stored in `profiles.height_cm`.
+    var heightCm: Double?
+    /// Body weight in kilograms. Stored in `profiles.weight_kg`.
+    var weightKg: Double?
+    /// Date of birth as an ISO-8601 date string ("YYYY-MM-DD").
+    /// PostgREST returns PostgreSQL `date` columns as plain date strings, not
+    /// timestamps, so this is stored as `String?` to avoid decoder mismatches.
+    var birthdate: String?
     let createdAt: Date
+    var updatedAt: Date
+
+    // MARK: - Derived
+
+    /// Birth year extracted from `birthdate` (e.g. "1990-01-01" → 1990).
+    var birthYear: Int? {
+        guard let birthdate, birthdate.count >= 4 else { return nil }
+        return Int(birthdate.prefix(4))
+    }
+
+    /// Approximate age in whole years, derived from `birthdate`.
+    var age: Int? {
+        guard let year = birthYear else { return nil }
+        return Calendar.current.component(.year, from: Date()) - year
+    }
+
+    // MARK: - Coding keys
 
     enum CodingKeys: String, CodingKey {
         case id
         case displayName = "display_name"
+        case heightCm    = "height_cm"
+        case weightKg    = "weight_kg"
+        case birthdate
         case createdAt   = "created_at"
+        case updatedAt   = "updated_at"
+    }
+}
+
+// MARK: - Custom Decodable
+
+extension UserProfile {
+    /// `height_cm` and `weight_kg` may be stored as PostgreSQL `numeric` columns
+    /// that PostgREST serialises as JSON strings.  Decode with a string fallback.
+    /// Keeping the init in an extension preserves the synthesised memberwise
+    /// initialiser used by previews.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id          = try c.decode(UUID.self,    forKey: .id)
+        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+        heightCm    = Self.decodeFlexDouble(c, key: .heightCm)
+        weightKg    = Self.decodeFlexDouble(c, key: .weightKg)
+        birthdate   = try c.decodeIfPresent(String.self, forKey: .birthdate)
+        createdAt   = try c.decode(Date.self,    forKey: .createdAt)
+        updatedAt   = try c.decode(Date.self,    forKey: .updatedAt)
+    }
+
+    private static func decodeFlexDouble(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Double? {
+        if let d = try? container.decodeIfPresent(Double.self, forKey: key) { return d }
+        if let s = try? container.decodeIfPresent(String.self, forKey: key) { return Double(s) }
+        return nil
     }
 }
