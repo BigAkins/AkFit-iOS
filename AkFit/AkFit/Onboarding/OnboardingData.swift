@@ -22,7 +22,9 @@ final class OnboardingData {
     var displayName: String = ""
 
     var sex: UserGoal.Sex?
-    var birthYear: Int = Calendar.current.component(.year, from: Date()) - 30
+    var birthYear:  Int = Calendar.current.component(.year, from: Date()) - 30
+    var birthMonth: Int = 1
+    var birthDay:   Int = 1
 
     /// Height — feet component (4–7).
     var heightFeet: Int = 5
@@ -82,13 +84,19 @@ extension OnboardingData {
     /// the user's `UserProfile`.
     ///
     /// - Goal parameters (goalType, targetPace) come from `goal`.
-    /// - Body stats (height, weight, birthYear) come from `profile`.
-    /// - Sex and activity level are not stored in the current schema; they will
-    ///   be nil and must be re-selected by the user in edit flows.
+    /// - Body stats (height, weight, birthdate) come from `profile`.
+    /// - Sex defaults to `.male` and activity level to `.moderate` — neither
+    ///   is stored in the schema. Edit flows should prompt the user to confirm.
     static func from(goal: UserGoal, profile: UserProfile? = nil) -> OnboardingData {
         let d = OnboardingData()
         d.goalType = goal.goalType
         d.pace     = goal.targetPace ?? .moderate
+
+        // Sex and activity level are not stored in the schema.
+        // Default to reasonable values so the form is immediately usable;
+        // the user should confirm or adjust before saving.
+        d.sex           = .male
+        d.activityLevel = .moderate
 
         if let profile {
             d.displayName = profile.displayName ?? ""
@@ -100,8 +108,17 @@ extension OnboardingData {
             if let kg = profile.weightKg {
                 d.weightLbs = kgToLbs(kg)
             }
-            if let year = profile.birthYear {
-                d.birthYear = year
+            // Parse full "YYYY-MM-DD" birthdate into year, month, and day.
+            if let birthdate = profile.birthdate {
+                let parts = birthdate.split(separator: "-")
+                if parts.count == 3,
+                   let year  = Int(parts[0]),
+                   let month = Int(parts[1]),
+                   let day   = Int(parts[2]) {
+                    d.birthYear  = year
+                    d.birthMonth = month
+                    d.birthDay   = day
+                }
             }
         }
         return d

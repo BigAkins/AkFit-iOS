@@ -1,7 +1,8 @@
 import SwiftUI
 import Supabase
 
-/// Sheet for editing the user's body stats: height, weight, birth year, and sex.
+/// Sheet for editing the user's body stats: display name, height, weight,
+/// full birthdate, sex, and activity level.
 ///
 /// Presented from `SettingsView` via the "Edit Profile" row.
 ///
@@ -9,6 +10,10 @@ import Supabase
 /// - Upserts the `profiles` row with updated body stats.
 /// - PATCHes the `goals` row with recalculated daily macro targets so the
 ///   dashboard immediately reflects the change.
+///
+/// **Sex / activity level:** these are not stored in the schema. They default
+/// to Male / Moderately Active when the sheet opens. The user must confirm or
+/// adjust them before saving — a footer note makes this explicit.
 struct EditProfileView: View {
     let goal: UserGoal
     let profile: UserProfile?
@@ -20,10 +25,11 @@ struct EditProfileView: View {
     @State private var isSaving  = false
     @State private var saveError: String? = nil
 
-    private static let currentYear = Calendar.current.component(.year, from: Date())
-    private static let yearRange   = Array(stride(
-        from: currentYear - 80, through: currentYear - 15, by: 1
-    ))
+    // Birthdate range: ages 15–80.
+    private static let minBirthdate: Date = Calendar.current.date(
+        byAdding: .year, value: -80, to: Date())!
+    private static let maxBirthdate: Date = Calendar.current.date(
+        byAdding: .year, value: -15, to: Date())!
 
     init(goal: UserGoal, profile: UserProfile? = nil) {
         self.goal    = goal
@@ -41,9 +47,29 @@ struct EditProfileView: View {
         Binding(
             get: { draft.heightFeet * 12 + draft.heightInches },
             set: { total in
-                let clamped         = min(max(total, 48), 95)
+                let clamped        = min(max(total, 48), 95)
                 draft.heightFeet   = clamped / 12
                 draft.heightInches = clamped % 12
+            }
+        )
+    }
+
+    /// Bridges the three separate Int fields (year/month/day) to a single Date
+    /// used by the DatePicker. Reads from draft; writes back on change.
+    private var birthdateBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c   = DateComponents()
+                c.year  = draft.birthYear
+                c.month = draft.birthMonth
+                c.day   = draft.birthDay
+                return Calendar.current.date(from: c) ?? Self.maxBirthdate
+            },
+            set: { date in
+                let cal          = Calendar.current
+                draft.birthYear  = cal.component(.year,  from: date)
+                draft.birthMonth = cal.component(.month, from: date)
+                draft.birthDay   = cal.component(.day,   from: date)
             }
         )
     }
@@ -78,19 +104,29 @@ struct EditProfileView: View {
                         in: 48...95,
                         step: 1
                     )
-                    Picker("Born in", selection: $draft.birthYear) {
-                        ForEach(Self.yearRange.reversed(), id: \.self) { year in
-                            Text(String(year)).tag(year)
-                        }
-                    }
+                    DatePicker(
+                        "Date of birth",
+                        selection: birthdateBinding,
+                        in: Self.minBirthdate...Self.maxBirthdate,
+                        displayedComponents: .date
+                    )
+                    // Segmented control: immediately visible, no navigation needed.
                     Picker("Sex", selection: $draft.sex) {
                         Text("Male")  .tag(Optional(UserGoal.Sex.male))
                         Text("Female").tag(Optional(UserGoal.Sex.female))
                     }
+                    .pickerStyle(.segmented)
+                    Picker("Activity level", selection: $draft.activityLevel) {
+                        Text("Sedentary")        .tag(Optional(UserGoal.ActivityLevel.sedentary))
+                        Text("Lightly Active")   .tag(Optional(UserGoal.ActivityLevel.light))
+                        Text("Moderately Active").tag(Optional(UserGoal.ActivityLevel.moderate))
+                        Text("Active")           .tag(Optional(UserGoal.ActivityLevel.active))
+                        Text("Very Active")      .tag(Optional(UserGoal.ActivityLevel.veryActive))
+                    }
                 } header: {
                     Text("Profile")
                 } footer: {
-                    Text("Name is optional. Height, weight, age, and sex are used to calculate your daily calorie and macro targets.")
+                    Text("Sex and activity level aren't saved to your account — they default to Male / Moderately Active each time you open this screen. Adjust if needed before saving.")
                 }
 
                 if let saveError {
@@ -166,6 +202,8 @@ struct EditProfileView: View {
 
         let trimmedName = draft.displayName.trimmingCharacters(in: .whitespaces)
         let displayName: String? = trimmedName.isEmpty ? nil : trimmedName
+        let birthdate = String(format: "%04d-%02d-%02d",
+                               draft.birthYear, draft.birthMonth, draft.birthDay)
 
         isSaving  = true
         saveError = nil
@@ -173,10 +211,10 @@ struct EditProfileView: View {
         Task {
             defer { isSaving = false }
             do {
-                // Update display name + body stats in profiles.
-                let updatedProfile = try await upsertProfile(userId: userId, input: input, displayName: displayName)
-                // Recalculate and update macro targets in goals.
-                let updatedGoal    = try await patchGoal(userId: userId, input: input, out: out)
+                let updatedProfile = try await upsertProfile(
+                    userId: userId, input: input, displayName: displayName, birthdate: birthdate
+                )
+                let updatedGoal = try await patchGoal(userId: userId, input: input, out: out)
                 authManager.updateProfile(updatedProfile)
                 authManager.updateGoal(updatedGoal)
                 dismiss()
@@ -186,8 +224,13 @@ struct EditProfileView: View {
         }
     }
 
-    /// Upserts the `profiles` row with updated display name and body stats.
-    private func upsertProfile(userId: UUID, input: MacroCalculator.Input, displayName: String?) async throws -> UserProfile {
+    /// Upserts the `profiles` row with updated display name, body stats, and full birthdate.
+    private func upsertProfile(
+        userId:      UUID,
+        input:       MacroCalculator.Input,
+        displayName: String?,
+        birthdate:   String
+    ) async throws -> UserProfile {
         struct ProfileUpsert: Encodable {
             let id:           UUID
             let display_name: String?
@@ -201,7 +244,7 @@ struct EditProfileView: View {
             display_name: displayName,
             height_cm:    Int(input.heightCm.rounded()),
             weight_kg:    Int(input.weightKg.rounded()),
-            birthdate:    "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            birthdate:    birthdate,
             updated_at:   Date()
         )
         return try await SupabaseClientProvider.shared
@@ -259,7 +302,7 @@ struct EditProfileView: View {
         ),
         profile: UserProfile(
             id: UUID(), displayName: nil,
-            heightCm: 178, weightKg: 82, birthdate: "1992-01-01",
+            heightCm: 178, weightKg: 82, birthdate: "1992-06-15",
             createdAt: Date(), updatedAt: Date()
         )
     )
