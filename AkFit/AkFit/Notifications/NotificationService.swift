@@ -20,6 +20,12 @@ import UserNotifications
 /// `scenePhase` in `AkFitApp`). This maintains a rolling schedule without any
 /// background processing.
 ///
+/// ## Foreground presentation
+/// `NotificationService` is the `UNUserNotificationCenter` delegate. Without a
+/// delegate, iOS silently suppresses local notifications when the app is in the
+/// foreground. The `willPresent` delegate method opts in to banner + sound so
+/// reminders are always visible regardless of app state.
+///
 /// ## Permission
 /// Authorization is requested only when the user first enables reminders —
 /// never on cold launch. Denied state surfaces a link to iPhone Settings.
@@ -28,7 +34,7 @@ import UserNotifications
 /// `isEnabled` and `reminderTime` are persisted in `UserDefaults` so settings
 /// survive app restarts without a network round-trip.
 @Observable
-final class NotificationService {
+final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Persisted state
 
@@ -61,9 +67,32 @@ final class NotificationService {
     /// Prefix shared by all AkFit reminder identifiers.
     private let idPrefix = "akfit.reminder."
 
+    // MARK: - Reminder messages
+    //
+    // Rotated by day-of-year so each day gets a different message without any
+    // stored state. Food and weight logging prompts alternate to cover both
+    // core product loops.
+
+    private static let reminderMessages: [(title: String, body: String)] = [
+        ("Don't forget to log your food",
+         "Tap to track what you've eaten today."),
+        ("Don't forget to log your weight",
+         "Jump on the scale and log it in AkFit."),
+        ("Time to log your meals",
+         "Stay on top of your calories and macros."),
+        ("Log your food today",
+         "A quick log keeps your goals on track."),
+        ("Have you logged today?",
+         "Open AkFit to track your food for the day."),
+        ("Log your weight today",
+         "Track your progress — weigh in and record it."),
+        ("Stay on track today",
+         "Don't forget to log your food."),
+    ]
+
     // MARK: - Init
 
-    init() {
+    override init() {
         let defaults = UserDefaults.standard
         isEnabled    = defaults.bool(forKey: Keys.enabled)
 
@@ -77,6 +106,32 @@ final class NotificationService {
             comps.second = 0
             reminderTime = Calendar.current.date(from: comps) ?? Date()
         }
+        super.init()
+        // Register as delegate so foreground notifications are presented.
+        // Must come after super.init() — self is not fully formed before that.
+        center.delegate = self
+    }
+
+    // MARK: - UNUserNotificationCenterDelegate
+
+    /// Called when a notification fires while the app is in the foreground.
+    ///
+    /// Without this method iOS swallows local notifications silently when the
+    /// app is active. Opting in to `.banner` and `.sound` makes reminders
+    /// visible in all app states — active, background, and terminated.
+    ///
+    /// Only AkFit reminder identifiers are opted in; any other notification
+    /// (e.g. from a framework) is passed through with empty options.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        guard notification.request.identifier.hasPrefix(idPrefix) else {
+            completionHandler([])
+            return
+        }
+        completionHandler([.banner, .sound])
     }
 
     // MARK: - Authorization
@@ -151,6 +206,9 @@ final class NotificationService {
     /// Skips days that already have a pending notification and days whose
     /// reminder time has already passed (can't schedule in the past).
     ///
+    /// Each day receives a message chosen by day-of-year modulo the message
+    /// count, so the rotation varies across the week without stored state.
+    ///
     /// Safe to call repeatedly — existing pending notifications are untouched.
     func scheduleReminder() async {
         guard isEnabled, authStatus == .authorized else { return }
@@ -176,9 +234,14 @@ final class NotificationService {
 
             guard let fireDate = calendar.date(from: comps), fireDate > now else { continue }
 
+            // Pick a message by day-of-year so the rotation is stable per date
+            // but varies across days without any additional stored state.
+            let dayOfYear = calendar.ordinality(of: .day, in: .year, for: targetDay) ?? dayOffset
+            let msg       = Self.reminderMessages[dayOfYear % Self.reminderMessages.count]
+
             let content      = UNMutableNotificationContent()
-            content.title    = "Time to log your meals"
-            content.body     = "Keep your nutrition on track — log what you've eaten today."
+            content.title    = msg.title
+            content.body     = msg.body
             content.sound    = .default
 
             let triggerComps = calendar.dateComponents([.year, .month, .day, .hour, .minute],
