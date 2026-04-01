@@ -99,7 +99,10 @@ final class AuthManager {
             // Token refresh doesn't change profile or goal — update session only.
             self.session = session
 
-        case .signedOut:
+        case .signedOut, .userDeleted:
+            // userDeleted fires when the account is removed (admin-deleted or future
+            // account-deletion feature). Treat it identically to sign-out so the app
+            // doesn't remain in an authenticated state with a deleted session.
             self.session = nil
             self.profile = nil
             self.goal    = nil

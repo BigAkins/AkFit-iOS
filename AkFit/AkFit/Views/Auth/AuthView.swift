@@ -125,7 +125,7 @@ struct AuthView: View {
                     Group {
                         if isSubmitting {
                             ProgressView()
-                                .tint(.white)
+                                .tint(Color(UIColor.systemBackground))
                         } else {
                             Text(mode.label)
                                 .font(.body.weight(.semibold))
@@ -343,16 +343,19 @@ struct AuthView: View {
     private func handleAppleSignInResult(_ result: Result<ASAuthorization, Error>) {
         switch result {
         case .success(let authorization):
+            // Set isSubmitting immediately so the UI is locked while the
+            // credential extraction and Supabase call complete.
+            isSubmitting = true
             guard
                 let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
                 let tokenData  = credential.identityToken,
                 let idToken    = String(data: tokenData, encoding: .utf8),
                 let nonce      = currentNonce
             else {
+                isSubmitting = false
                 errorMessage = "Sign in with Apple failed. Please try again."
                 return
             }
-            isSubmitting = true
             Task {
                 defer { isSubmitting = false }
                 do {
