@@ -15,10 +15,11 @@ import SwiftUI
 struct FoodDetailView: View {
     let food: FoodItem
 
-    @State private var quantity:  Double
-    @State private var mealSlot: MealSlot = MealSlot.inferred()
-    @State private var isLogging: Bool    = false
-    @State private var logError:  String? = nil
+    @State private var quantity:               Double
+    @State private var mealSlot:               MealSlot = MealSlot.inferred()
+    @State private var isLogging:              Bool     = false
+    @State private var logError:               String?  = nil
+    @State private var showGuestFavoritesAlert: Bool    = false
 
     /// `initialQuantity` seeds the portion stepper on first render.
     /// Pass the user's last-used quantity for repeat foods; omit for new foods
@@ -101,6 +102,10 @@ struct FoodDetailView: View {
             ToolbarItem(placement: .navigationBarTrailing) {
                 let isFav = favStore.isFavorite(food)
                 Button {
+                    if authManager.isGuest {
+                        showGuestFavoritesAlert = true
+                        return
+                    }
                     guard let userId = authManager.currentUserId else { return }
                     Task { try? await favStore.toggle(food: food, for: userId) }
                 } label: {
@@ -112,6 +117,11 @@ struct FoodDetailView: View {
         }
         .safeAreaInset(edge: .bottom) {
             logButton
+        }
+        .alert("Favorites require an account", isPresented: $showGuestFavoritesAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Create an account to save favorites across sessions.")
         }
     }
 

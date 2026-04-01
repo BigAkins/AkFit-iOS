@@ -4,17 +4,34 @@ import SwiftUI
 struct AkFitApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
-    @State private var authManager   = AuthManager()
-    @State private var logStore      = FoodLogStore()
-    @State private var favStore      = FavoriteFoodStore()
-    @State private var weightStore   = BodyweightStore()
-    @State private var router        = AppRouter()
-    @State private var healthKit     = HealthKitService()
-    @State private var notifications = NotificationService()
+    // App-level stores. Initialized explicitly in `init()` so that the
+    // single `GuestDataStore` instance can be injected into every store
+    // that needs it — `AuthManager`, `FoodLogStore`, and `BodyweightStore`.
+    @State private var guestStore:    GuestDataStore
+    @State private var authManager:   AuthManager
+    @State private var logStore:      FoodLogStore
+    @State private var favStore:      FavoriteFoodStore
+    @State private var weightStore:   BodyweightStore
+    @State private var router:        AppRouter
+    @State private var healthKit:     HealthKitService
+    @State private var notifications: NotificationService
+
+    init() {
+        let gs = GuestDataStore()
+        _guestStore    = State(initialValue: gs)
+        _authManager   = State(initialValue: AuthManager(guestStore: gs))
+        _logStore      = State(initialValue: FoodLogStore(guestStore: gs))
+        _weightStore   = State(initialValue: BodyweightStore(guestStore: gs))
+        _favStore      = State(initialValue: FavoriteFoodStore())
+        _router        = State(initialValue: AppRouter())
+        _healthKit     = State(initialValue: HealthKitService())
+        _notifications = State(initialValue: NotificationService())
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environment(guestStore)
                 .environment(authManager)
                 .environment(logStore)
                 .environment(favStore)
@@ -24,9 +41,7 @@ struct AkFitApp: App {
                 .environment(notifications)
         }
         // Refill the 7-day notification window whenever the app comes to the
-        // foreground. This keeps the rolling schedule current without any
-        // background processing — the notifications themselves fire even while
-        // the app is closed.
+        // foreground. Keeps the rolling schedule current without background processing.
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             Task {
@@ -43,12 +58,12 @@ struct AkFitApp: App {
 
 /// Reads `AuthManager` state and routes to the correct top-level screen.
 ///
-/// Routing rules:
-///   isLoading                            → blank (prevents auth-screen flash on cold start)
-///   !isAuthenticated                     → AuthView
-///   isAuthenticated && dataFetchFailed   → DataFetchErrorView (retry screen)
-///   !isOnboarded                         → OnboardingView
-///   default                              → MainTabView
+/// Routing rules (evaluated in order):
+///   isLoading                                          → blank (prevents flash on cold start)
+///   userState == .signedOut                            → AuthView
+///   userState == .authenticated && dataFetchFailed     → DataFetchErrorView (retry screen)
+///   !isOnboarded                                       → OnboardingView (guest or auth)
+///   default                                            → MainTabView
 private struct RootView: View {
     @Environment(AuthManager.self) private var authManager
 
@@ -57,9 +72,9 @@ private struct RootView: View {
             if authManager.isLoading {
                 Color(UIColor.systemBackground)
                     .ignoresSafeArea()
-            } else if !authManager.isAuthenticated {
+            } else if authManager.userState == .signedOut {
                 AuthView()
-            } else if authManager.dataFetchFailed {
+            } else if authManager.userState == .authenticated && authManager.dataFetchFailed {
                 DataFetchErrorView()
             } else if !authManager.isOnboarded {
                 OnboardingView()
@@ -68,7 +83,7 @@ private struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.25), value: authManager.isLoading)
-        .animation(.easeInOut(duration: 0.25), value: authManager.isAuthenticated)
+        .animation(.easeInOut(duration: 0.25), value: authManager.userState)
         .animation(.easeInOut(duration: 0.25), value: authManager.isOnboarded)
         .animation(.easeInOut(duration: 0.25), value: authManager.dataFetchFailed)
     }

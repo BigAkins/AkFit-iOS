@@ -12,6 +12,7 @@ import SwiftUI
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
+    @Environment(FoodLogStore.self)        private var logStore
     @Environment(BodyweightStore.self)     private var weightStore
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
@@ -21,6 +22,7 @@ struct SettingsView: View {
     @State private var isSigningOut          = false
     @State private var signOutError: String? = nil
     @State private var showSignOutConfirm    = false
+    @State private var showExitGuestConfirm  = false
 
     // MARK: - Body
 
@@ -28,6 +30,9 @@ struct SettingsView: View {
         NavigationStack {
             List {
                 accountSection
+                if authManager.isGuest {
+                    guestBannerSection
+                }
                 if authManager.goal != nil {
                     profileSection
                     targetsSection
@@ -36,7 +41,7 @@ struct SettingsView: View {
                 if healthKit.isAvailable {
                     healthSection
                 }
-                signOutSection
+                exitOrSignOutSection
             }
             .onAppear {
                 healthKit.checkAuthorization()
@@ -58,8 +63,7 @@ struct SettingsView: View {
                         .environment(authManager)
                 }
             }
-            // Confirmation dialog — shown before sign-out fires.
-            // Keeps the destructive action intentional and safe against accidental taps.
+            // Sign-out confirmation dialog (authenticated users).
             .confirmationDialog(
                 "Sign Out",
                 isPresented: $showSignOutConfirm,
@@ -70,6 +74,17 @@ struct SettingsView: View {
             } message: {
                 Text("You'll need to sign in again to access your account.")
             }
+            // Exit Guest Mode confirmation dialog — warns about permanent local data deletion.
+            .confirmationDialog(
+                "Exit Guest Mode",
+                isPresented: $showExitGuestConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete Data & Exit", role: .destructive) { exitGuestMode() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("All your local data — food logs, weight entries, and goals — will be permanently deleted. This cannot be undone.")
+            }
         }
     }
 
@@ -78,48 +93,81 @@ struct SettingsView: View {
     private var accountSection: some View {
         Section {
             HStack(spacing: 14) {
-                // Avatar circle — uses display name initial when available,
-                // otherwise falls back to the email initial.
                 ZStack {
                     Circle()
                         .fill(Color(.systemGray5))
                         .frame(width: 52, height: 52)
-                    Text(avatarInitial)
-                        .font(.title2.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    if authManager.isGuest {
+                        Image(systemName: "person.fill")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // Avatar initial — display name preferred over email initial.
+                        Text(avatarInitial)
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    // When a display name exists, show it prominently and
-                    // demote the email to a secondary line beneath it.
-                    if let name = authManager.profile?.displayName,
-                       !name.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(name)
+                    if authManager.isGuest {
+                        Text("Guest")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.primary)
-                        if let email = authManager.currentUserEmail {
-                            Text(email)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                        Text("Local data only — no account")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        // When a display name exists, show it prominently and
+                        // demote the email to a secondary line beneath it.
+                        if let name = authManager.profile?.displayName,
+                           !name.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Text(name)
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.primary)
+                            if let email = authManager.currentUserEmail {
+                                Text(email)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.75)
+                            }
+                        } else {
+                            Text(authManager.currentUserEmail ?? "Signed in")
+                                .font(.body.weight(.medium))
+                                .foregroundStyle(.primary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.75)
                         }
-                    } else {
-                        Text(authManager.currentUserEmail ?? "Signed in")
-                            .font(.body.weight(.medium))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
 
-                    if let created = authManager.profile?.createdAt {
-                        Text("Member since \(memberYear(created))")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
+                        if let created = authManager.profile?.createdAt {
+                            Text("Member since \(memberYear(created))")
+                                .font(.footnote)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
             }
             .padding(.vertical, 6)
+        }
+    }
+
+    // MARK: - Guest banner section
+
+    private var guestBannerSection: some View {
+        Section {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.icloud")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your data stays on this device")
+                        .font(.footnote.weight(.medium))
+                    Text("Create an account to back up your data and sync it across devices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
@@ -337,28 +385,42 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Sign-out section
+    // MARK: - Exit / sign-out section
 
-    private var signOutSection: some View {
-        Section {
-            // Button sets the confirmation flag — dialog fires before any sign-out
-            // logic runs, preventing accidental account sign-outs.
-            Button {
-                showSignOutConfirm = true
-            } label: {
-                HStack {
-                    Text("Sign Out")
+    @ViewBuilder
+    private var exitOrSignOutSection: some View {
+        if authManager.isGuest {
+            // Guest users exit guest mode (destructive — deletes all local data).
+            Section {
+                Button {
+                    showExitGuestConfirm = true
+                } label: {
+                    Text("Exit Guest Mode")
                         .foregroundStyle(.red)
-                    Spacer()
-                    if isSigningOut { ProgressView() }
                 }
             }
-            .disabled(isSigningOut)
+        } else {
+            // Authenticated users sign out.
+            Section {
+                // Button sets the confirmation flag — dialog fires before any sign-out
+                // logic runs, preventing accidental account sign-outs.
+                Button {
+                    showSignOutConfirm = true
+                } label: {
+                    HStack {
+                        Text("Sign Out")
+                            .foregroundStyle(.red)
+                        Spacer()
+                        if isSigningOut { ProgressView() }
+                    }
+                }
+                .disabled(isSigningOut)
 
-            if let err = signOutError {
-                Text(err)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                if let err = signOutError {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
             }
         }
     }
@@ -424,6 +486,18 @@ struct SettingsView: View {
             }
         }
     }
+
+    /// Exits guest mode and destroys all local data.
+    ///
+    /// Called after the user confirms the destructive confirmation dialog.
+    /// Resets in-memory store state before clearing guest data so stale
+    /// entries don't linger in memory after routing back to `AuthView`.
+    private func exitGuestMode() {
+        logStore.reset()
+        weightStore.reset()
+        authManager.exitGuestMode()
+        // AuthManager sets userState = .signedOut → RootView re-routes to AuthView.
+    }
 }
 
 // MARK: - Preview
@@ -447,6 +521,8 @@ struct SettingsView: View {
     )
     return SettingsView()
         .environment(auth)
+        .environment(FoodLogStore())
+        .environment(BodyweightStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }
@@ -470,6 +546,8 @@ struct SettingsView: View {
     )
     return SettingsView()
         .environment(auth)
+        .environment(FoodLogStore())
+        .environment(BodyweightStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }
@@ -477,6 +555,8 @@ struct SettingsView: View {
 #Preview("Signed in, no goal") {
     SettingsView()
         .environment(AuthManager(previewMode: true))
+        .environment(FoodLogStore())
+        .environment(BodyweightStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }

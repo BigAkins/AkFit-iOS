@@ -578,6 +578,40 @@ private struct ResultsStepView: View {
 
         Task { @MainActor in
             defer { isSaving = false }
+
+            // Guest path: build objects locally, no Supabase calls.
+            if authManager.isGuest {
+                let now = Date()
+                let birthdateStr = "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01"
+                let profile = UserProfile(
+                    id:            userId,
+                    displayName:   displayName,
+                    heightCm:      input.heightCm,
+                    weightKg:      input.weightKg,
+                    birthdate:     birthdateStr,
+                    sex:           input.sex,
+                    activityLevel: input.activityLevel,
+                    createdAt:     now,
+                    updatedAt:     now
+                )
+                let goal = UserGoal(
+                    id:            UUID(),
+                    userId:        userId,
+                    goalType:      input.goalType,
+                    targetWeight:  nil,
+                    targetPace:    input.goalType == .maintenance ? nil : input.pace,
+                    dailyCalories: out.calories,
+                    dailyProtein:  out.proteinG,
+                    dailyCarbs:    out.carbsG,
+                    dailyFat:      out.fatG,
+                    createdAt:     now,
+                    updatedAt:     now
+                )
+                authManager.markOnboarded(goal: goal, profile: profile)
+                return
+            }
+
+            // Authenticated path: persist to Supabase.
             do {
                 let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)

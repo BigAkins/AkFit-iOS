@@ -210,6 +210,41 @@ struct EditProfileView: View {
 
         Task {
             defer { isSaving = false }
+
+            // Guest path: update locally, no Supabase.
+            if authManager.isGuest {
+                let now = Date()
+                let updatedProfile = UserProfile(
+                    id:            userId,
+                    displayName:   displayName,
+                    heightCm:      input.heightCm,
+                    weightKg:      input.weightKg,
+                    birthdate:     birthdate,
+                    sex:           input.sex,
+                    activityLevel: input.activityLevel,
+                    createdAt:     authManager.profile?.createdAt ?? now,
+                    updatedAt:     now
+                )
+                let updatedGoal = UserGoal(
+                    id:            goal.id,
+                    userId:        userId,
+                    goalType:      goal.goalType,
+                    targetWeight:  goal.targetWeight,
+                    targetPace:    goal.targetPace,
+                    dailyCalories: out.calories,
+                    dailyProtein:  out.proteinG,
+                    dailyCarbs:    out.carbsG,
+                    dailyFat:      out.fatG,
+                    createdAt:     goal.createdAt,
+                    updatedAt:     now
+                )
+                authManager.updateProfile(updatedProfile)
+                authManager.updateGoal(updatedGoal)
+                dismiss()
+                return
+            }
+
+            // Authenticated path: persist to Supabase.
             do {
                 let updatedProfile = try await upsertProfile(
                     userId: userId, input: input, displayName: displayName, birthdate: birthdate

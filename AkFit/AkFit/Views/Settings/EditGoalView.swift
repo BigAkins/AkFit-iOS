@@ -161,6 +161,43 @@ struct EditGoalView: View {
 
         Task {
             defer { isSaving = false }
+
+            // Guest path: update locally, no Supabase.
+            if authManager.isGuest {
+                let now = Date()
+                let updatedGoal = UserGoal(
+                    id:            goal.id,
+                    userId:        userId,
+                    goalType:      input.goalType,
+                    targetWeight:  goal.targetWeight,
+                    targetPace:    input.goalType == .maintenance ? nil : input.pace,
+                    dailyCalories: out.calories,
+                    dailyProtein:  out.proteinG,
+                    dailyCarbs:    out.carbsG,
+                    dailyFat:      out.fatG,
+                    createdAt:     goal.createdAt,
+                    updatedAt:     now
+                )
+                var updatedProfile = authManager.profile ?? UserProfile(
+                    id:            userId,
+                    displayName:   nil,
+                    heightCm:      nil,
+                    weightKg:      nil,
+                    birthdate:     nil,
+                    sex:           nil,
+                    activityLevel: nil,
+                    createdAt:     now,
+                    updatedAt:     now
+                )
+                updatedProfile.activityLevel = input.activityLevel
+                updatedProfile.updatedAt     = now
+                authManager.updateGoal(updatedGoal)
+                authManager.updateProfile(updatedProfile)
+                dismiss()
+                return
+            }
+
+            // Authenticated path: persist to Supabase.
             do {
                 // Patch goal row with new goal type, pace, and recalculated targets.
                 let updatedGoal = try await patchGoal(userId: userId, input: input, out: out)

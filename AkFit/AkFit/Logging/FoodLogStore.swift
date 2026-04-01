@@ -1,12 +1,18 @@
 import Foundation
 import Supabase
 
-/// Owns all in-session food log state and the Supabase read/write operations.
+/// Owns all in-session food log state and the read/write operations.
 ///
 /// Injected into the SwiftUI environment from `AkFitApp`. Multiple views share
 /// this single instance — no extra network round-trips needed after mutations.
 ///
-/// ## Data lifecycle
+/// ## Guest mode
+/// When `guestStore.isActive` is `true`, all operations read from and write to
+/// `GuestDataStore` (UserDefaults) instead of Supabase. The in-memory derived
+/// lists (`todayLogs`, `recentFoods`, `weekLogs`) are populated the same way
+/// in both modes so views need no conditional logic.
+///
+/// ## Data lifecycle (authenticated path)
 /// 1. `DashboardView` calls `refreshToday(userId:)` via `.task` on first appear.
 /// 2. `SearchView` calls `refreshRecents(userId:)` via `.task` on first appear.
 /// 3. `ProgressTabView` calls `refreshWeek(userId:)` via `.task` on first appear.
@@ -17,42 +23,32 @@ final class FoodLogStore {
 
     // MARK: - State
 
-    /// All confirmed food log entries for the current calendar day (device local time).
-    private(set) var todayLogs: [FoodLog] = []
-
-    /// The most recently logged distinct foods across all days, newest first.
-    /// Deduplicated by `foodName` so each food appears at most once.
-    /// Populated by `refreshRecents`; updated in memory after each `insert`.
-    private(set) var recentFoods: [FoodLog] = []
-
-    /// All food log entries for the past 7 calendar days (today + 6 prior days).
-    /// Ordered by `logged_at` ascending. Used by `ProgressTabView` to build
-    /// `DayProgress` totals; updated in memory after each `insert` and `delete`.
-    private(set) var weekLogs: [FoodLog] = []
-
-    /// True while `refreshToday` is in flight. Use for subtle loading states.
-    private(set) var isRefreshing: Bool = false
-
-    /// Set to `true` when `refreshToday` fails (network error, Supabase error, etc.).
-    /// Cleared on the next successful refresh. `DashboardView` reads this to show
-    /// an error state with a retry button instead of the misleading empty state.
-    private(set) var refreshFailed: Bool = false
-
-    /// Set to the saved `FoodLog` immediately after a successful `insert`.
-    /// Consumed by `SearchView` to show the post-log confirmation banner.
-    /// Cleared by `clearLastLog()` once the banner has been displayed.
+    private(set) var todayLogs:      [FoodLog] = []
+    private(set) var recentFoods:    [FoodLog] = []
+    private(set) var weekLogs:       [FoodLog] = []
+    private(set) var isRefreshing:   Bool      = false
+    private(set) var refreshFailed:  Bool      = false
     private(set) var lastLoggedEntry: FoodLog? = nil
+
+    // MARK: - Guest data store
+
+    private let guestStore: GuestDataStore?
+
+    private var isGuest: Bool { guestStore?.isActive == true }
 
     // MARK: - Init
 
-    /// Default initializer — starts with empty state.
-    /// Also used as the preview initializer: pass any combination of seeding
-    /// parameters in `#Preview` blocks to populate state without a network call.
+    /// Production initializer. Pass the shared `GuestDataStore` from `AkFitApp`.
+    ///
+    /// Also used as the preview initializer: omit `guestStore` and pass
+    /// seed arrays to populate state without a network call.
     init(
-        previewLogs:     [FoodLog] = [],
-        previewRecents:  [FoodLog] = [],
-        previewWeekLogs: [FoodLog] = []
+        guestStore:      GuestDataStore? = nil,
+        previewLogs:     [FoodLog]       = [],
+        previewRecents:  [FoodLog]       = [],
+        previewWeekLogs: [FoodLog]       = []
     ) {
+        self.guestStore  = guestStore
         self.todayLogs   = previewLogs
         self.recentFoods = previewRecents
         self.weekLogs    = previewWeekLogs
@@ -60,15 +56,6 @@ final class FoodLogStore {
 
     // MARK: - Last-used quantity
 
-    /// Returns the quantity the user last logged for a food with the same name
-    /// and serving label, or `nil` if no matching history exists in `recentFoods`.
-    ///
-    /// Matched on `(foodName, servingLabel)` — not just `foodName` — to avoid
-    /// using a quantity from a different serving size of the same food (e.g.
-    /// 4 oz chicken should not prefill the 100 g variant).
-    ///
-    /// `recentFoods` is already in memory by the time `FoodDetailView` opens,
-    /// so this is a pure synchronous lookup with no network cost.
     func lastQuantity(for food: FoodItem) -> Double? {
         recentFoods
             .first { $0.foodName == food.name && $0.servingLabel == food.servingSize }
@@ -77,25 +64,41 @@ final class FoodLogStore {
 
     // MARK: - Banner state
 
-    /// Clears `lastLoggedEntry` after the banner has been picked up by the UI.
     func clearLastLog() {
         lastLoggedEntry = nil
     }
 
-    // MARK: - Fetch
+    // MARK: - Reset (called when exiting guest mode)
 
-    /// Fetches `food_logs` rows for `userId` whose `logged_at` falls within today
-    /// (midnight → midnight, device local time zone). Replaces `todayLogs` on success.
-    ///
-    /// Errors are swallowed here — a failed refresh leaves `todayLogs` unchanged
-    /// (empty on first load, stale on retry failure) rather than crashing or alerting.
+    /// Clears all in-memory log state. Called by `SettingsView` when the user
+    /// exits guest mode so stale guest data doesn't persist in memory.
+    func reset() {
+        todayLogs       = []
+        recentFoods     = []
+        weekLogs        = []
+        isRefreshing    = false
+        refreshFailed   = false
+        lastLoggedEntry = nil
+    }
+
+    // MARK: - Fetch today
+
     func refreshToday(userId: UUID) async {
         isRefreshing = true
         refreshFailed = false
         defer { isRefreshing = false }
 
-        let (startISO, endISO) = todayRange()
+        // Guest path: filter from in-memory guest store.
+        if let gs = guestStore, gs.isActive {
+            let (start, end) = todayDates()
+            todayLogs = gs.allFoodLogs
+                .filter { $0.loggedAt >= start && $0.loggedAt < end }
+                .sorted { $0.loggedAt < $1.loggedAt }
+            return
+        }
 
+        // Authenticated path: Supabase.
+        let (startISO, endISO) = todayRange()
         do {
             let logs: [FoodLog] = try await SupabaseClientProvider.shared
                 .from("food_logs")
@@ -108,22 +111,25 @@ final class FoodLogStore {
                 .value
             todayLogs = logs
         } catch {
-            // Surfaces `refreshFailed` so DashboardView can show a retry state
-            // instead of the misleading "Nothing logged yet" empty state.
             refreshFailed = true
         }
     }
 
     // MARK: - Fetch recents
 
-    /// Fetches the most recently logged distinct foods for `userId` across all days.
-    ///
-    /// Queries the last 30 entries by `logged_at` descending, then deduplicates
-    /// by `foodName` client-side (first occurrence = most recent per food).
-    /// The result is capped at 8 entries for a clean UI list.
-    ///
-    /// Errors are swallowed — `recentFoods` stays as-is on failure.
     func refreshRecents(userId: UUID) async {
+        // Guest path: sort all guest logs newest-first, deduplicate by name.
+        if let gs = guestStore, gs.isActive {
+            let sorted = gs.allFoodLogs.sorted { $0.loggedAt > $1.loggedAt }
+            var seen = Set<String>()
+            recentFoods = sorted
+                .filter { seen.insert($0.foodName).inserted }
+                .prefix(8)
+                .map { $0 }
+            return
+        }
+
+        // Authenticated path: Supabase.
         do {
             let logs: [FoodLog] = try await SupabaseClientProvider.shared
                 .from("food_logs")
@@ -134,8 +140,6 @@ final class FoodLogStore {
                 .execute()
                 .value
 
-            // Array is newest-first; the first occurrence of each name is the
-            // most recent log for that food — exactly what we want.
             var seen = Set<String>()
             recentFoods = logs
                 .filter { seen.insert($0.foodName).inserted }
@@ -148,11 +152,17 @@ final class FoodLogStore {
 
     // MARK: - Fetch week
 
-    /// Fetches all food log entries for `userId` in the past 7 calendar days
-    /// (today + the 6 preceding days, in device-local time). Replaces `weekLogs`.
-    ///
-    /// Errors are swallowed — `weekLogs` stays as-is (empty or stale).
     func refreshWeek(userId: UUID) async {
+        // Guest path: filter from guest store by week start date.
+        if let gs = guestStore, gs.isActive {
+            let weekStart = weekStartDate()
+            weekLogs = gs.allFoodLogs
+                .filter { $0.loggedAt >= weekStart }
+                .sorted { $0.loggedAt < $1.loggedAt }
+            return
+        }
+
+        // Authenticated path: Supabase.
         do {
             let logs: [FoodLog] = try await SupabaseClientProvider.shared
                 .from("food_logs")
@@ -170,24 +180,46 @@ final class FoodLogStore {
 
     // MARK: - Insert
 
-    /// Persists a food log entry to Supabase, then appends the confirmed row to
-    /// `todayLogs`, `weekLogs`, and prepends it to `recentFoods`. All three lists
-    /// update immediately so views re-render without an extra network round-trip.
-    ///
-    /// Scaled nutrition values are computed here so the DB row is self-contained:
-    /// the dashboard reads them with a plain `SUM`, no further math required.
     func insert(food: FoodItem, quantity: Double, mealSlot: MealSlot, for userId: UUID) async throws {
+        let calories = Int((Double(food.calories) * quantity).rounded())
+        let proteinG = food.proteinG * quantity
+        let carbsG   = food.carbsG   * quantity
+        let fatG     = food.fatG     * quantity
+        let now      = Date()
+
+        // Guest path: create locally and persist to GuestDataStore.
+        if let gs = guestStore, gs.isActive {
+            let log = FoodLog(
+                id:           UUID(),
+                userId:       userId,
+                foodName:     food.name,
+                servingLabel: food.servingSize,
+                quantity:     quantity,
+                calories:     calories,
+                proteinG:     proteinG,
+                carbsG:       carbsG,
+                fatG:         fatG,
+                mealSlot:     mealSlot,
+                loggedAt:     now,
+                createdAt:    now
+            )
+            gs.appendFoodLog(log)
+            updateInMemory(with: log)
+            return
+        }
+
+        // Authenticated path: persist to Supabase, update in-memory from confirmed row.
         let payload = FoodLogInsert(
             userId:       userId,
             foodName:     food.name,
             servingLabel: food.servingSize,
             quantity:     quantity,
-            calories:     Int((Double(food.calories) * quantity).rounded()),
-            proteinG:     food.proteinG * quantity,
-            carbsG:       food.carbsG   * quantity,
-            fatG:         food.fatG     * quantity,
+            calories:     calories,
+            proteinG:     proteinG,
+            carbsG:       carbsG,
+            fatG:         fatG,
             mealSlot:     mealSlot,
-            loggedAt:     Date()
+            loggedAt:     now
         )
 
         let saved: FoodLog = try await SupabaseClientProvider.shared
@@ -198,66 +230,83 @@ final class FoodLogStore {
             .execute()
             .value
 
-        todayLogs.append(saved)
-        weekLogs.append(saved)
+        updateInMemory(with: saved)
+    }
 
-        // Bubble the newly logged food to the top of recents, keeping the list
-        // deduplicated and capped at 8 so the search screen stays current.
+    /// Appends a saved log to all three in-memory lists and updates `lastLoggedEntry`.
+    private func updateInMemory(with log: FoodLog) {
+        todayLogs.append(log)
+        weekLogs.append(log)
+
         var seen = Set<String>()
-        recentFoods = ([saved] + recentFoods)
+        recentFoods = ([log] + recentFoods)
             .filter { seen.insert($0.foodName).inserted }
             .prefix(8)
             .map { $0 }
 
-        lastLoggedEntry = saved
+        lastLoggedEntry = log
     }
 
     // MARK: - Delete
 
-    /// Deletes a food log entry from Supabase, then removes it from `todayLogs`
-    /// and `weekLogs`. Throws on network or server errors so the caller can surface
-    /// feedback.
     func delete(logId: UUID) async throws {
+        // Guest path: remove from GuestDataStore and in-memory lists.
+        if let gs = guestStore, gs.isActive {
+            gs.deleteFoodLog(id: logId)
+            removeFromMemory(logId: logId)
+            return
+        }
+
+        // Authenticated path: Supabase delete.
         try await SupabaseClientProvider.shared
             .from("food_logs")
             .delete()
             .eq("id", value: logId.uuidString)
             .execute()
+        removeFromMemory(logId: logId)
+    }
+
+    private func removeFromMemory(logId: UUID) {
         todayLogs.removeAll   { $0.id == logId }
         weekLogs.removeAll    { $0.id == logId }
         recentFoods.removeAll { $0.id == logId }
     }
 
-    // MARK: - Private helpers
+    // MARK: - Date helpers
 
-    /// Returns ISO 8601 strings for the start and exclusive end of today in the
-    /// device's time zone. Postgres `timestamptz` comparisons are timezone-aware,
-    /// so including the UTC offset in the string gives correct results for all locales.
+    /// Returns the start and exclusive end of today in device-local time.
+    private func todayDates() -> (start: Date, end: Date) {
+        let cal   = Calendar.current
+        let start = cal.startOfDay(for: Date())
+        let end   = cal.date(byAdding: .day, value: 1, to: start)!
+        return (start, end)
+    }
+
+    /// Returns the start of the 7-day window (6 days ago, device-local midnight).
+    private func weekStartDate() -> Date {
+        let cal   = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        return cal.date(byAdding: .day, value: -6, to: today)!
+    }
+
+    /// Returns ISO 8601 strings for today's range (used for Supabase queries).
     private func todayRange() -> (start: String, end: String) {
-        let calendar = Calendar.current
-        let start    = calendar.startOfDay(for: Date())
-        let end      = calendar.date(byAdding: .day, value: 1, to: start)!
-        let fmt      = ISO8601DateFormatter()
+        let (start, end) = todayDates()
+        let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return (fmt.string(from: start), fmt.string(from: end))
     }
 
-    /// Returns an ISO 8601 string for midnight 6 days ago (device local time),
-    /// i.e. the start of the 7-day window used by `refreshWeek`.
+    /// Returns an ISO 8601 string for the start of the 7-day window (Supabase queries).
     private func weekStartISO() -> String {
-        let calendar  = Calendar.current
-        let today     = calendar.startOfDay(for: Date())
-        let weekStart = calendar.date(byAdding: .day, value: -6, to: today)!
-        let fmt       = ISO8601DateFormatter()
+        let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt.string(from: weekStart)
+        return fmt.string(from: weekStartDate())
     }
 }
 
-// MARK: - Insert payload
+// MARK: - Insert payload (authenticated path)
 
-/// Encodable struct for inserting a new row. Excludes server-generated fields
-/// (`id`, `created_at`) so Postgres uses its own defaults for them.
 private struct FoodLogInsert: Encodable {
     let userId:       UUID
     let foodName:     String

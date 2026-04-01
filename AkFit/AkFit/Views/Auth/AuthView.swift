@@ -182,6 +182,14 @@ struct AuthView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                 }
                 .disabled(isSubmitting)
+
+                // Guest mode — local-only, no account required.
+                Button("Continue as Guest") {
+                    authManager.enterGuestMode()
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .disabled(isSubmitting)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 48)
