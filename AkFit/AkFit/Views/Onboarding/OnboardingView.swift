@@ -248,11 +248,31 @@ private struct BodyStatsStepView: View {
     let onNext: () -> Void
 
     // Ranges computed once — values are stable for the app session.
-    private static let thisYear       = Calendar.current.component(.year, from: Date())
-    private static let yearRange      = Array(stride(from: thisYear - 80, through: thisYear - 15, by: 1))
+    private static let minBirthdate   = Calendar.current.date(byAdding: .year, value: -80, to: Date())!
+    private static let maxBirthdate   = Calendar.current.date(byAdding: .year, value: -15, to: Date())!
     private static let feetRange      = Array(4...7)
     private static let inchesRange    = Array(0...11)
     private static let weightLbsRange = Array(66...440)   // 30–200 kg
+
+    /// Bridges the three separate Int fields (year/month/day) on `OnboardingData`
+    /// to a single `Date` used by the DatePicker. Writes back on change.
+    private var birthdateBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c   = DateComponents()
+                c.year  = data.birthYear
+                c.month = data.birthMonth
+                c.day   = data.birthDay
+                return Calendar.current.date(from: c) ?? Self.maxBirthdate
+            },
+            set: { date in
+                let cal         = Calendar.current
+                data.birthYear  = cal.component(.year,  from: date)
+                data.birthMonth = cal.component(.month, from: date)
+                data.birthDay   = cal.component(.day,   from: date)
+            }
+        )
+    }
 
     var body: some View {
         OnboardingStepLayout(
@@ -260,21 +280,14 @@ private struct BodyStatsStepView: View {
             subtitle: "Used to calculate your calorie and macro targets."
         ) {
             VStack(spacing: 0) {
-                // Birth year — compact row
-                HStack {
-                    Text("Born in")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker("Birth year", selection: $data.birthYear) {
-                        ForEach(Self.yearRange.reversed(), id: \.self) {
-                            Text(String($0)).tag($0)
-                        }
-                    }
-                    .pickerStyle(.wheel)
-                    .frame(width: 110, height: 96)
-                    .clipped()
-                }
+                // Date of birth — compact DatePicker (taps open a calendar sheet).
+                DatePicker(
+                    "Date of birth",
+                    selection: birthdateBinding,
+                    in: Self.minBirthdate...Self.maxBirthdate,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.compact)
                 .padding(.horizontal, 24)
 
                 Divider().padding(.horizontal, 24)
@@ -575,6 +588,8 @@ private struct ResultsStepView: View {
 
         let trimmedName = data.displayName.trimmingCharacters(in: .whitespaces)
         let displayName: String? = trimmedName.isEmpty ? nil : trimmedName
+        // Full "YYYY-MM-DD" birthdate captured directly from the picker fields.
+        let birthdate = String(format: "%04d-%02d-%02d", data.birthYear, data.birthMonth, data.birthDay)
 
         Task { @MainActor in
             defer { isSaving = false }
@@ -582,13 +597,12 @@ private struct ResultsStepView: View {
             // Guest path: build objects locally, no Supabase calls.
             if authManager.isGuest {
                 let now = Date()
-                let birthdateStr = "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01"
                 let profile = UserProfile(
                     id:            userId,
                     displayName:   displayName,
                     heightCm:      input.heightCm,
                     weightKg:      input.weightKg,
-                    birthdate:     birthdateStr,
+                    birthdate:     birthdate,
                     sex:           input.sex,
                     activityLevel: input.activityLevel,
                     createdAt:     now,
@@ -613,7 +627,7 @@ private struct ResultsStepView: View {
 
             // Authenticated path: persist to Supabase.
             do {
-                let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName)
+                let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName, birthdate: birthdate)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
@@ -626,9 +640,10 @@ private struct ResultsStepView: View {
     }
 
     private func upsertProfile(
-        userId: UUID,
-        input: MacroCalculator.Input,
-        displayName: String?
+        userId:      UUID,
+        input:       MacroCalculator.Input,
+        displayName: String?,
+        birthdate:   String
     ) async throws -> UserProfile {
         struct ProfileInsert: Encodable {
             let id:             UUID
@@ -645,9 +660,7 @@ private struct ResultsStepView: View {
             display_name:   displayName,
             height_cm:      Int(input.heightCm.rounded()),
             weight_kg:      Int(input.weightKg.rounded()),
-            // Construct a date string from birth year. Jan 1 is used as a proxy
-            // since onboarding collects year only; Edit Profile stores the full date.
-            birthdate:      "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            birthdate:      birthdate,
             sex:            input.sex.rawValue,
             activity_level: input.activityLevel.rawValue,
             updated_at:     Date()

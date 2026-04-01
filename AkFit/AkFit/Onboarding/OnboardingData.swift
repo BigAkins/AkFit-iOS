@@ -54,7 +54,14 @@ final class OnboardingData {
     // MARK: - Derived
 
     var age: Int {
-        Calendar.current.component(.year, from: Date()) - birthYear
+        var comps   = DateComponents()
+        comps.year  = birthYear
+        comps.month = birthMonth
+        comps.day   = birthDay
+        guard let birthDate = Calendar.current.date(from: comps) else {
+            return Calendar.current.component(.year, from: Date()) - birthYear
+        }
+        return Calendar.current.dateComponents([.year], from: birthDate, to: Date()).year ?? 0
     }
 
     /// Returns a valid input when all required fields are set.
