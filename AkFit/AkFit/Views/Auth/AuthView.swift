@@ -42,9 +42,12 @@ struct AuthView: View {
         VStack(spacing: 0) {
             Spacer()
 
-            // Wordmark
-            Text("AkFit")
-                .font(.system(size: 40, weight: .bold, design: .rounded))
+            // Logo asset — original rendering preserves brand colours.
+            Image("akfit_logo")
+                .resizable()
+                .renderingMode(.original)
+                .scaledToFit()
+                .frame(height: 84)
                 .padding(.bottom, 48)
 
             // Mode picker
@@ -453,9 +456,9 @@ struct AuthView: View {
 
 /// Draws the four-colour Google "G" mark using Canvas — no image asset required.
 ///
-/// Four arc segments (green → yellow → red → blue) form a ring with a ~60° gap
+/// Four arc segments (green → yellow → red → blue) form a ring with an ~80° gap
 /// at the right side (the G opening). A horizontal blue bar extends from the
-/// ring's interior to its right edge, completing the G shape.
+/// horizontal centre of the circle to its right outer edge, completing the G shape.
 ///
 /// Colours match Google's published brand hex values:
 ///   Blue #4285F4 · Red #EA4335 · Yellow #FBBC05 · Green #34A853
@@ -487,16 +490,19 @@ private struct GoogleGLogo: View {
             }
 
             // Clockwise arcs; 0° = 3 o'clock, angles increase clockwise on screen.
-            // 60° gap at right (330° → 30°) forms the G opening.
-            strokeArc(Self.gGreen,  from:  30, to: 120)  // 4 o'clock → 7 o'clock
-            strokeArc(Self.gYellow, from: 120, to: 195)  // 7 o'clock → 9:30
-            strokeArc(Self.gRed,    from: 195, to: 295)  // 9:30 → 1 o'clock (through top)
-            strokeArc(Self.gBlue,   from: 295, to: 330)  // 1 o'clock → 2 o'clock
+            // 80° gap at right (320° → 40°) forms the G opening.
+            strokeArc(Self.gGreen,  from:  40, to: 120)  // ~4 o'clock → 7 o'clock
+            strokeArc(Self.gYellow, from: 120, to: 195)  // 7 o'clock → ~9:30
+            strokeArc(Self.gRed,    from: 195, to: 305)  // ~9:30 → ~1 o'clock (through top)
+            strokeArc(Self.gBlue,   from: 305, to: 320)  // ~1 o'clock → ~2 o'clock
 
-            // Horizontal bar — blue, centred vertically, spans ring interior → right edge.
-            let barH = lw * 0.85
-            let barX = cx - sz.width * 0.02    // overlap ring's inner edge slightly
-            let barW = (r + sz.width * 0.04) - barX
+            // Horizontal bar — blue, centred vertically.
+            // Runs from the horizontal centre (cx) to the outer right edge of the ring (cx + r).
+            // Previously barW collapsed to ~0 because `r` (a radius) was incorrectly used as
+            // an x-coordinate in the width calculation; fixed by using `r` directly as the width.
+            let barH = lw
+            let barX = cx
+            let barW = r
             var bar  = Path()
             bar.addRect(CGRect(x: barX, y: cy - barH / 2, width: barW, height: barH))
             ctx.fill(bar, with: .color(Self.gBlue))
