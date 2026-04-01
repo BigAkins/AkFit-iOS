@@ -1,17 +1,24 @@
 import SwiftUI
 import Supabase
 
-/// Sheet for editing the user's calorie and macro targets.
+/// Sheet for editing the user's goal type, activity level, pace, and the
+/// resulting calorie and macro targets.
 ///
 /// Presented from `SettingsView`. Pre-populates from the current active
 /// `UserGoal` and `UserProfile` using `OnboardingData.from(goal:profile:)`.
 ///
-/// **Live preview:** the calorie and macro numbers at the top of the form
-/// update as the user changes any input — they see exactly what their new
-/// targets will be before committing.
+/// **Body stats are not edited here.** Weight, height, birthdate, and sex
+/// live in `EditProfileView`. The existing profile values flow through to
+/// `MacroCalculator` automatically — the user only adjusts goal parameters.
 ///
-/// **Persistence:** PATCHes the existing `goals` row in place (no new row
-/// inserted), then upserts the `profiles` row with updated body stats.
+/// **Live preview:** calorie and macro numbers update as the user changes any
+/// picker — they see exactly what their new targets will be before committing.
+///
+/// **Persistence:**
+/// - PATCHes the `goals` row with the new goal type, pace, and recalculated
+///   daily targets.
+/// - PATCHes `profiles.activity_level` so the value stays in sync with what
+///   `EditProfileView` reads back on next open.
 struct EditGoalView: View {
     let goal: UserGoal
     let profile: UserProfile?
@@ -23,12 +30,6 @@ struct EditGoalView: View {
     @State private var isSaving  = false
     @State private var saveError: String? = nil
 
-    // Pre-computed year range for the birth year picker.
-    private static let currentYear = Calendar.current.component(.year, from: Date())
-    private static let yearRange   = Array(stride(
-        from: currentYear - 80, through: currentYear - 15, by: 1
-    ))
-
     init(goal: UserGoal, profile: UserProfile? = nil) {
         self.goal    = goal
         self.profile = profile
@@ -39,17 +40,6 @@ struct EditGoalView: View {
 
     private var calculated: MacroCalculator.Output? {
         draft.calculatorInput.map { MacroCalculator.calculate($0) }
-    }
-
-    private var totalInchesBinding: Binding<Int> {
-        Binding(
-            get: { draft.heightFeet * 12 + draft.heightInches },
-            set: { total in
-                let clamped         = min(max(total, 48), 95)
-                draft.heightFeet   = clamped / 12
-                draft.heightInches = clamped % 12
-            }
-        )
     }
 
     // MARK: - Body
@@ -91,31 +81,6 @@ struct EditGoalView: View {
                             Text(UserGoal.Pace.moderate.displayName).tag(UserGoal.Pace.moderate)
                             Text(UserGoal.Pace.fast    .displayName).tag(UserGoal.Pace.fast)
                         }
-                    }
-                }
-
-                // ── Body stats ───────────────────────────────────────────
-                Section("Body stats") {
-                    Stepper(
-                        "Weight: \(draft.weightLbs) lbs",
-                        value: $draft.weightLbs,
-                        in: 66...440,
-                        step: 1
-                    )
-                    Stepper(
-                        "Height: \(draft.heightFeet)′ \(draft.heightInches)″",
-                        value: totalInchesBinding,
-                        in: 48...95,
-                        step: 1
-                    )
-                    Picker("Born in", selection: $draft.birthYear) {
-                        ForEach(Self.yearRange.reversed(), id: \.self) { year in
-                            Text(String(year)).tag(year)
-                        }
-                    }
-                    Picker("Sex", selection: $draft.sex) {
-                        Text("Male")  .tag(Optional(UserGoal.Sex.male))
-                        Text("Female").tag(Optional(UserGoal.Sex.female))
                     }
                 }
 
@@ -197,11 +162,13 @@ struct EditGoalView: View {
         Task {
             defer { isSaving = false }
             do {
-                // Patch the goal row with updated targets.
-                let updated = try await patchGoal(userId: userId, input: input, out: out)
-                // Upsert profile with updated body stats.
-                let updatedProfile = try await upsertProfile(userId: userId, input: input)
-                authManager.updateGoal(updated)
+                // Patch goal row with new goal type, pace, and recalculated targets.
+                let updatedGoal = try await patchGoal(userId: userId, input: input, out: out)
+                // Patch profiles.activity_level so EditProfileView stays in sync.
+                let updatedProfile = try await patchActivityLevel(
+                    userId: userId, activityLevel: input.activityLevel
+                )
+                authManager.updateGoal(updatedGoal)
                 authManager.updateProfile(updatedProfile)
                 dismiss()
             } catch {
@@ -210,11 +177,12 @@ struct EditGoalView: View {
         }
     }
 
-    /// PATCHes the user's active goal row in `goals`.
+    /// PATCHes the user's active goal row in `goals` with new goal parameters
+    /// and recalculated daily targets.
     private func patchGoal(
         userId: UUID,
-        input: MacroCalculator.Input,
-        out:   MacroCalculator.Output
+        input:  MacroCalculator.Input,
+        out:    MacroCalculator.Output
     ) async throws -> UserGoal {
         let payload = GoalUpdate(
             goalType:      input.goalType.rawValue,
@@ -236,25 +204,23 @@ struct EditGoalView: View {
             .value
     }
 
-    /// Upserts the `profiles` row with updated body stats.
-    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
-        struct ProfileUpdate: Encodable {
-            let id:         UUID
-            let height_cm:  Int
-            let weight_kg:  Int
-            let birthdate:  String
-            let updated_at: Date
+    /// PATCHes `profiles.activity_level` so the value is in sync the next
+    /// time `EditProfileView` is opened or macro targets are recalculated.
+    ///
+    /// Body stats (weight, height, birthdate, sex) are not touched — they
+    /// are only edited in `EditProfileView`.
+    private func patchActivityLevel(
+        userId:        UUID,
+        activityLevel: UserGoal.ActivityLevel
+    ) async throws -> UserProfile {
+        struct ActivityPatch: Encodable {
+            let activity_level: String
+            let updated_at:     Date
         }
-        let row = ProfileUpdate(
-            id:         userId,
-            height_cm:  Int(input.heightCm.rounded()),
-            weight_kg:  Int(input.weightKg.rounded()),
-            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
-            updated_at: Date()
-        )
         return try await SupabaseClientProvider.shared
             .from("profiles")
-            .upsert(row, onConflict: "id")
+            .update(ActivityPatch(activity_level: activityLevel.rawValue, updated_at: Date()))
+            .eq("id", value: userId.uuidString)
             .select()
             .single()
             .execute()
