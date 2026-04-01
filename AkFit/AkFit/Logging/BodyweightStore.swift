@@ -98,10 +98,11 @@ final class BodyweightStore {
         // Guest path: create locally and persist to GuestDataStore.
         if let gs = guestStore, gs.isActive {
             let log = BodyweightLog(
-                id:       UUID(),
-                userId:   userId,
-                weightKg: weightKg,
-                loggedAt: now
+                id:        UUID(),
+                userId:    userId,
+                weightKg:  weightKg,
+                loggedAt:  now,
+                createdAt: now
             )
             gs.appendBodyweightLog(log)
             weekLogs.append(log)
