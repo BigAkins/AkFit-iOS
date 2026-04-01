@@ -3,9 +3,9 @@ import Supabase
 
 /// Owns all authentication state for the app.
 ///
-/// Routing logic in `RootView` reads `isAuthenticated` and `isOnboarded` to
-/// decide which top-level screen to show. Both are derived from the session
-/// and goal state managed here.
+/// Routing logic in `RootView` reads `isAuthenticated`, `isOnboarded`, and
+/// `dataFetchFailed` to decide which top-level screen to show. All are derived
+/// from the session and goal state managed here.
 ///
 /// State is sourced exclusively from the `authStateChanges` async stream —
 /// no manual session fetches. On every sign-in event the active goal is
@@ -16,6 +16,13 @@ import Supabase
 /// `goal` are all set in one synchronous block after `fetchUserData` completes.
 /// This prevents `RootView` from flashing `OnboardingView` for an already-
 /// onboarded user during sign-in.
+///
+/// ## Network failure safety
+/// `fetchActiveGoal` and `fetchProfile` distinguish between Supabase's
+/// "row not found" response (PGRST116 — expected for new users) and all other
+/// errors (network failures, timeouts, unexpected backend errors). Only a true
+/// "not found" response returns `nil`; any other failure sets `dataFetchFailed`
+/// so `RootView` can surface a retry screen instead of routing to `OnboardingView`.
 @Observable
 final class AuthManager {
 
@@ -33,6 +40,11 @@ final class AuthManager {
     /// `true` while the initial auth-state check is in progress.
     /// Prevents a flash of the auth screen on cold start for returning users.
     private(set) var isLoading: Bool = true
+
+    /// `true` when a network or backend error prevented user data from loading.
+    /// Cleared on successful fetch or sign-out.
+    /// `RootView` shows a retry screen instead of `OnboardingView` when this is set.
+    private(set) var dataFetchFailed: Bool = false
 
     // MARK: - Derived state
 
@@ -86,13 +98,15 @@ final class AuthManager {
             // (Setting session first would briefly show OnboardingView even for
             // onboarded users while fetchUserData is in flight.)
             if let session {
-                let (fetchedProfile, fetchedGoal) = await fetchUserData(userId: session.user.id)
-                // All three properties set synchronously — no intermediate renders.
-                self.profile = fetchedProfile
-                self.goal    = fetchedGoal
-                self.session = session
+                let result = await fetchUserData(userId: session.user.id)
+                // All properties set synchronously — no intermediate renders.
+                self.profile         = result.profile
+                self.goal            = result.goal
+                self.dataFetchFailed = result.fetchFailed
+                self.session         = session
             } else {
-                self.session = nil
+                self.session         = nil
+                self.dataFetchFailed = false
             }
 
         case .tokenRefreshed, .userUpdated:
@@ -103,9 +117,10 @@ final class AuthManager {
             // userDeleted fires when the account is removed (admin-deleted or future
             // account-deletion feature). Treat it identically to sign-out so the app
             // doesn't remain in an authenticated state with a deleted session.
-            self.session = nil
-            self.profile = nil
-            self.goal    = nil
+            self.session         = nil
+            self.profile         = nil
+            self.goal            = nil
+            self.dataFetchFailed = false
 
         default:
             // passwordRecovery, mfaChallengeVerified, etc. — no routing change.
@@ -117,32 +132,68 @@ final class AuthManager {
 
     // MARK: - User data fetching
 
-    /// Fetches profile and active goal concurrently.
-    /// Returns `(nil, nil)` for a brand-new user with no rows yet — this is
-    /// the expected "not onboarded" state, not an error.
-    private func fetchUserData(userId: UUID) async -> (UserProfile?, UserGoal?) {
-        async let profileResult = fetchProfile(userId: userId)
-        async let goalResult    = fetchActiveGoal(userId: userId)
-        return await (profileResult, goalResult)
+    /// Carries the result of a concurrent profile + goal fetch.
+    private struct UserDataResult {
+        var profile:     UserProfile?
+        var goal:        UserGoal?
+        /// `true` when at least one fetch failed for a reason other than
+        /// "row does not exist yet" (e.g. network timeout, unexpected backend error).
+        var fetchFailed: Bool
     }
 
-    private func fetchProfile(userId: UUID) async -> UserProfile? {
+    /// Fetches profile and active goal concurrently.
+    ///
+    /// A Supabase "row not found" response (PGRST116) is the expected state for
+    /// brand-new users and returns `nil` without setting `fetchFailed`.
+    /// Any other error (network failure, timeout, unexpected backend error) sets
+    /// `fetchFailed = true` so the caller can distinguish a new user from a
+    /// returning user whose data could not be loaded.
+    private func fetchUserData(userId: UUID) async -> UserDataResult {
+        async let profileTask = fetchProfile(userId: userId)
+        async let goalTask    = fetchActiveGoal(userId: userId)
+
+        let profileResult = await profileTask
+        let goalResult    = await goalTask
+
+        let fetchFailed = profileResult.fetchFailed || goalResult.fetchFailed
+        return UserDataResult(
+            profile:     profileResult.value,
+            goal:        goalResult.value,
+            fetchFailed: fetchFailed
+        )
+    }
+
+    /// Supabase PostgREST "row not found" error code returned when `.single()`
+    /// finds zero matching rows. This is the expected state for new users.
+    private static let postgrestNotFound = "PGRST116"
+
+    /// Returns `true` when `error` represents a "row not found" response from
+    /// Supabase PostgREST — i.e. the query succeeded but matched zero rows.
+    private static func isNotFound(_ error: Error) -> Bool {
+        (error as? PostgrestError)?.code == postgrestNotFound
+    }
+
+    private func fetchProfile(userId: UUID) async -> (value: UserProfile?, fetchFailed: Bool) {
         do {
-            return try await SupabaseClientProvider.shared
+            let value: UserProfile = try await SupabaseClientProvider.shared
                 .from("profiles")
                 .select()
                 .eq("id", value: userId.uuidString)
                 .single()
                 .execute()
                 .value
+            return (value, false)
         } catch {
-            return nil
+            // PGRST116 = no profile row yet. Expected for brand-new users; not an error.
+            if Self.isNotFound(error) { return (nil, false) }
+            // Any other error (network, timeout, backend) — surface as fetch failure.
+            return (nil, true)
         }
     }
 
-    private func fetchActiveGoal(userId: UUID) async -> UserGoal? {
+    private func fetchActiveGoal(userId: UUID) async -> (value: UserGoal?, fetchFailed: Bool) {
         do {
-            return try await SupabaseClientProvider.shared
+            let value: UserGoal = try await SupabaseClientProvider.shared
                 .from("goals")
                 .select()
                 .eq("user_id", value: userId.uuidString)
@@ -151,10 +202,28 @@ final class AuthManager {
                 .single()
                 .execute()
                 .value
+            return (value, false)
         } catch {
-            // No goal row = not yet onboarded. Expected for new users.
-            return nil
+            // PGRST116 = no goal row yet. Expected for new users; not an error.
+            if Self.isNotFound(error) { return (nil, false) }
+            // Any other error — returning user whose data could not be loaded.
+            return (nil, true)
         }
+    }
+
+    // MARK: - Retry after fetch failure
+
+    /// Re-fetches profile and goal for the current session.
+    ///
+    /// Called from the `RootView` error screen when the user taps "Try Again"
+    /// after a transient network failure prevented their data from loading.
+    /// Clears `dataFetchFailed` on success; sets it again on continued failure.
+    func retryFetchUserData() async {
+        guard let session else { return }
+        let result = await fetchUserData(userId: session.user.id)
+        self.profile         = result.profile
+        self.goal            = result.goal
+        self.dataFetchFailed = result.fetchFailed
     }
 
     // MARK: - Auth actions
