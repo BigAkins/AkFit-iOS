@@ -109,6 +109,9 @@ private struct GenericFoodRow: Decodable {
     let proteinG:       Double
     let carbsG:         Double
     let fatG:           Double
+    /// Restaurant or brand name (e.g. "McDonald's", "Chipotle").
+    /// `nil` for generic USDA foods. Maps to `FoodItem.brandOrCategory`.
+    let brand:          String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -119,6 +122,7 @@ private struct GenericFoodRow: Decodable {
         case proteinG       = "protein_g"
         case carbsG         = "carbs_g"
         case fatG           = "fat_g"
+        case brand
     }
 }
 
@@ -129,7 +133,7 @@ private extension FoodItem {
         self.init(
             id:              row.id,
             name:            row.foodName,
-            brandOrCategory: nil,
+            brandOrCategory: row.brand,
             servingSize:     row.servingLabel,
             servingWeightG:  row.servingWeightG ?? 100,
             calories:        row.calories,
