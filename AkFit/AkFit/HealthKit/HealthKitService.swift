@@ -37,7 +37,12 @@ final class HealthKitService {
 
     // MARK: - Private
 
-    private let store = HKHealthStore()
+    /// Lazily initialized so `HKHealthStore()` is never created until HealthKit
+    /// is confirmed available. Eager initialization caused a crash on iOS 26 when
+    /// the store was created before the window scene was fully active.
+    /// `@ObservationIgnored` prevents the `@Observable` macro from wrapping this
+    /// infrastructure property with observation hooks (it has no observable surface).
+    @ObservationIgnored private lazy var store = HKHealthStore()
 
     /// All sample and correlation types AkFit writes to Health.
     private var writeTypes: Set<HKSampleType> {
@@ -64,10 +69,13 @@ final class HealthKitService {
         guard isAvailable else { return }
         do {
             try await store.requestAuthorization(toShare: writeTypes, read: [])
+            refreshStatus()
         } catch {
             // Authorization failures are non-fatal; export calls will no-op.
+            // Do NOT call refreshStatus() here — if the authorization call itself
+            // failed, the store may be in a bad state and querying it could crash.
+            authStatus = .denied
         }
-        refreshStatus()
     }
 
     /// Reads the current authorization state from HealthKit and updates `authStatus`.
@@ -152,6 +160,7 @@ final class HealthKitService {
     // MARK: - Private helpers
 
     private func refreshStatus() {
+        guard isAvailable else { return }
         switch store.authorizationStatus(for: HKQuantityType(.bodyMass)) {
         case .sharingAuthorized: authStatus = .authorized
         case .sharingDenied:     authStatus = .denied
