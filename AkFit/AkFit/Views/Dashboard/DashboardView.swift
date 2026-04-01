@@ -189,18 +189,27 @@ struct DashboardView: View {
 
     // MARK: - Greeting
 
-    /// Returns a time-of-day salutation, personalized when the user has a display name.
+    /// Returns a greeting string for the given date.
     ///
-    /// - Parameter date: The reference date (defaults to now). Accepting a parameter
-    ///   keeps the logic testable and makes it straightforward to add special-case
-    ///   states in future — for example, checking `profile.birthdate` here for a
-    ///   "Happy birthday, [Name]" greeting without restructuring the call site.
+    /// Priority order:
+    /// 1. **Birthday** — when today's month/day matches `profile.birthdate`, returns
+    ///    "Happy birthday, [Name]" (or "Happy birthday!" if no name is set).
+    /// 2. **Time-of-day** — morning / afternoon / evening, personalized with the
+    ///    user's display name when available.
+    ///
+    /// The `date` parameter defaults to `Date()` but can be injected for testing
+    /// or to drive the birthday check without touching live state.
     private func greetingText(at date: Date = Date()) -> String {
         let name = authManager.profile?.displayName?
             .trimmingCharacters(in: .whitespaces)
 
-        // Future: compare `authManager.profile?.birthdate` against today's
-        // month-day here to show a birthday greeting when the date matches.
+        // Birthday check — fires when the stored month/day matches today's.
+        // Year is deliberately ignored so the greeting recurs every year.
+        if let birthdate = authManager.profile?.birthdate,
+           isBirthday(birthdate: birthdate, on: date) {
+            guard let name, !name.isEmpty else { return "Happy birthday!" }
+            return "Happy birthday, \(name)"
+        }
 
         let hour = Calendar.current.component(.hour, from: date)
         let salutation: String
@@ -212,6 +221,18 @@ struct DashboardView: View {
 
         guard let name, !name.isEmpty else { return salutation }
         return "\(salutation), \(name)"
+    }
+
+    /// Returns `true` when the month and day encoded in `birthdate` ("YYYY-MM-DD")
+    /// match the month and day of `date`. Year is intentionally ignored.
+    private func isBirthday(birthdate: String, on date: Date) -> Bool {
+        let parts = birthdate.split(separator: "-")
+        guard parts.count == 3,
+              let month = Int(parts[1]),
+              let day   = Int(parts[2]) else { return false }
+        let cal = Calendar.current
+        return cal.component(.month, from: date) == month
+            && cal.component(.day,   from: date) == day
     }
 
     // MARK: - Food log section headers
@@ -537,8 +558,24 @@ private struct ProgressRing: View {
 // MARK: - Preview helpers
 
 private extension DashboardView {
-    static func previewAuth(displayName: String? = "Alex") -> AuthManager {
+    /// Builds a preview `AuthManager` with a goal and optional profile fields.
+    ///
+    /// - Parameters:
+    ///   - displayName: Name shown in the greeting. Pass `nil` to test the no-name path.
+    ///   - birthdateIsToday: When `true`, generates a birthdate whose month/day matches
+    ///     today so the birthday greeting fires in Canvas previews.
+    static func previewAuth(
+        displayName: String? = "Alex",
+        birthdateIsToday: Bool = false
+    ) -> AuthManager {
         let auth = AuthManager(previewMode: true)
+        let cal   = Calendar.current
+        let today = Date()
+        let birthdateStr: String? = birthdateIsToday
+            ? String(format: "1992-%02d-%02d",
+                     cal.component(.month, from: today),
+                     cal.component(.day,   from: today))
+            : nil
         auth.markOnboarded(
             goal: UserGoal(
                 id: UUID(), userId: UUID(),
@@ -550,7 +587,8 @@ private extension DashboardView {
             ),
             profile: UserProfile(
                 id: UUID(), displayName: displayName,
-                heightCm: nil, weightKg: nil, birthdate: nil,
+                heightCm: nil, weightKg: nil,
+                birthdate: birthdateStr,
                 createdAt: Date(), updatedAt: Date()
             )
         )
@@ -607,6 +645,13 @@ private extension DashboardView {
 #Preview("Empty state — no name") {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: nil))
+        .environment(FoodLogStore())
+        .environment(AppRouter())
+}
+
+#Preview("Birthday") {
+    DashboardView()
+        .environment(DashboardView.previewAuth(displayName: "Alex", birthdateIsToday: true))
         .environment(FoodLogStore())
         .environment(AppRouter())
 }

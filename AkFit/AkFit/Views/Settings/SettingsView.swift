@@ -93,11 +93,13 @@ struct SettingsView: View {
                         Text(name)
                             .font(.body.weight(.semibold))
                             .foregroundStyle(.primary)
-                        Text(authManager.currentUserEmail ?? "")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
+                        if let email = authManager.currentUserEmail {
+                            Text(email)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
                     } else {
                         Text(authManager.currentUserEmail ?? "Signed in")
                             .font(.body.weight(.medium))
@@ -145,7 +147,7 @@ struct SettingsView: View {
                 .foregroundStyle(.primary)
             }
         } header: {
-            Text("Profile")
+            Text("Body stats")
         }
     }
 
