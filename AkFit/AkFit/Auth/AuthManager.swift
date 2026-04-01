@@ -192,6 +192,24 @@ final class AuthManager {
         try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
     }
 
+    /// Signs in via Apple ID credential.
+    ///
+    /// Called by `AuthView` after a successful Sign in with Apple presentation.
+    /// `rawNonce` is the original un-hashed nonce — Supabase re-hashes it to verify
+    /// against the `nonce` claim Apple embedded in the identity token JWT.
+    ///
+    /// Session and user data are updated via the `authStateChanges` observer,
+    /// so routing to onboarding or the main app happens automatically.
+    func signInWithApple(idToken: String, rawNonce: String) async throws {
+        try await SupabaseClientProvider.shared.auth.signInWithIdToken(
+            credentials: OpenIDConnectCredentials(
+                provider: .apple,
+                idToken: idToken,
+                nonce: rawNonce
+            )
+        )
+    }
+
     // MARK: - Post-onboarding
 
     /// Called by `OnboardingView` after persisting a new goal, so the app

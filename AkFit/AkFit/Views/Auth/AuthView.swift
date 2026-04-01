@@ -1,3 +1,5 @@
+import AuthenticationServices
+import CryptoKit
 import SwiftUI
 
 struct AuthView: View {
@@ -12,6 +14,9 @@ struct AuthView: View {
     /// Message shown in the password-reset confirmation alert. `nil` hides the alert.
     @State private var resetAlertMessage: String? = nil
     @State private var isResettingPassword: Bool = false
+    /// Raw nonce generated before each Apple sign-in presentation.
+    /// Stored here so the completion handler can forward it to Supabase.
+    @State private var currentNonce: String? = nil
 
     enum Mode: CaseIterable {
         case signIn, signUp
@@ -113,26 +118,58 @@ struct AuthView: View {
 
             Spacer()
 
-            // Primary CTA
-            Button(action: submit) {
-                Group {
-                    if isSubmitting {
-                        ProgressView()
-                            .tint(.white)
-                    } else {
-                        Text(mode.label)
-                            .font(.body.weight(.semibold))
+            // Bottom auth section — email/password CTA, divider, Sign in with Apple
+            VStack(spacing: 16) {
+                // Primary CTA
+                Button(action: submit) {
+                    Group {
+                        if isSubmitting {
+                            ProgressView()
+                                .tint(.white)
+                        } else {
+                            Text(mode.label)
+                                .font(.body.weight(.semibold))
+                        }
                     }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
                 }
-                .frame(maxWidth: .infinity)
+                .background(Color.primary)
+                .foregroundStyle(Color(UIColor.systemBackground))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .disabled(isSubmitting || !isFormValid)
+
+                // "or" divider
+                HStack(spacing: 12) {
+                    Rectangle()
+                        .frame(height: 0.5)
+                        .foregroundStyle(Color(.separator))
+                    Text("or")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Rectangle()
+                        .frame(height: 0.5)
+                        .foregroundStyle(Color(.separator))
+                }
+
+                // Sign in with Apple — works for both new and returning users.
+                // Supabase creates a new account on first use; subsequent sign-ins
+                // retrieve the existing session.
+                SignInWithAppleButton(mode == .signIn ? .signIn : .signUp) { request in
+                    let nonce = Self.randomNonceString()
+                    currentNonce = nonce
+                    request.requestedScopes = [.fullName, .email]
+                    // Apple receives the *hashed* nonce; the raw nonce goes to Supabase.
+                    request.nonce = Self.sha256(nonce)
+                } onCompletion: { result in
+                    handleAppleSignInResult(result)
+                }
                 .frame(height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .disabled(isSubmitting)
             }
-            .background(Color.primary)
-            .foregroundStyle(Color(UIColor.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
             .padding(.horizontal, 24)
             .padding(.bottom, 48)
-            .disabled(isSubmitting || !isFormValid)
         }
         .background(Color(UIColor.systemBackground))
         // Password-reset confirmation / error alert.
@@ -271,10 +308,73 @@ struct AuthView: View {
             }
         }
     }
-    /// Maps a raw Supabase / network error to a short, user-friendly message.
+
+    // MARK: - Sign in with Apple
+
+    /// Handles the `SignInWithAppleButton` completion result.
     ///
-    /// Supabase SDK error messages are often technical or include internal codes.
-    /// This mapping ensures beta testers see plain English rather than SDK jargon.
+    /// On success, calls `authManager.signInWithApple` which triggers the
+    /// `authStateChanges` stream — routing to onboarding or the main app is
+    /// handled automatically by `RootView`.
+    ///
+    /// User cancellation (error code 1001) is silently ignored — no error shown.
+    private func handleAppleSignInResult(_ result: Result<ASAuthorization, Error>) {
+        switch result {
+        case .success(let authorization):
+            guard
+                let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                let tokenData  = credential.identityToken,
+                let idToken    = String(data: tokenData, encoding: .utf8),
+                let nonce      = currentNonce
+            else {
+                errorMessage = "Sign in with Apple failed. Please try again."
+                return
+            }
+            isSubmitting = true
+            Task {
+                defer { isSubmitting = false }
+                do {
+                    try await authManager.signInWithApple(idToken: idToken, rawNonce: nonce)
+                    // authStateChanges fires → RootView re-routes automatically.
+                } catch {
+                    errorMessage = friendlyError(error)
+                }
+            }
+
+        case .failure(let error):
+            // Code 1001 = user cancelled — don't surface an error for that.
+            let nsError = error as NSError
+            guard !(nsError.domain == ASAuthorizationError.errorDomain &&
+                    nsError.code  == ASAuthorizationError.canceled.rawValue)
+            else { return }
+            errorMessage = "Sign in with Apple failed. Please try again."
+        }
+    }
+
+    // MARK: - Nonce helpers
+
+    /// Returns a cryptographically random alphanumeric nonce of `length` characters.
+    ///
+    /// The *hashed* version (SHA256) is passed to Apple's `ASAuthorizationAppleIDRequest`
+    /// so Apple can embed it in the identity token JWT. The *raw* version is forwarded
+    /// to Supabase's `signInWithIdToken`, which re-hashes and verifies it — preventing
+    /// token replay attacks.
+    private static func randomNonceString(length: Int = 32) -> String {
+        precondition(length > 0)
+        var bytes = [UInt8](repeating: 0, count: length)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "SecRandomCopyBytes failed with OSStatus \(status)")
+        let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+        return String(bytes.map { charset[Int($0) % charset.count] })
+    }
+
+    /// Returns the lowercase hex-encoded SHA256 digest of `input`.
+    private static func sha256(_ input: String) -> String {
+        SHA256.hash(data: Data(input.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+    }
+
     private func friendlyError(_ error: Error) -> String {
         let lower = error.localizedDescription.lowercased()
         if lower.contains("invalid login credentials") || lower.contains("invalid credentials") {
