@@ -62,6 +62,10 @@ struct EditProfileView: View {
                 }
 
                 Section {
+                    // Display name — optional, saved to profiles.display_name.
+                    TextField("Name", text: $draft.displayName)
+                        .textContentType(.name)
+                        .autocorrectionDisabled()
                     Stepper(
                         "Weight: \(draft.weightLbs) lbs",
                         value: $draft.weightLbs,
@@ -84,9 +88,9 @@ struct EditProfileView: View {
                         Text("Female").tag(Optional(UserGoal.Sex.female))
                     }
                 } header: {
-                    Text("Body stats")
+                    Text("Profile")
                 } footer: {
-                    Text("Height, weight, age, and sex are used to calculate your daily calorie and macro targets.")
+                    Text("Name is optional. Height, weight, age, and sex are used to calculate your daily calorie and macro targets.")
                 }
 
                 if let saveError {
@@ -160,14 +164,17 @@ struct EditProfileView: View {
             let userId = authManager.currentUserId
         else { return }
 
+        let trimmedName = draft.displayName.trimmingCharacters(in: .whitespaces)
+        let displayName: String? = trimmedName.isEmpty ? nil : trimmedName
+
         isSaving  = true
         saveError = nil
 
         Task {
             defer { isSaving = false }
             do {
-                // Update body stats in profiles.
-                let updatedProfile = try await upsertProfile(userId: userId, input: input)
+                // Update display name + body stats in profiles.
+                let updatedProfile = try await upsertProfile(userId: userId, input: input, displayName: displayName)
                 // Recalculate and update macro targets in goals.
                 let updatedGoal    = try await patchGoal(userId: userId, input: input, out: out)
                 authManager.updateProfile(updatedProfile)
@@ -179,21 +186,23 @@ struct EditProfileView: View {
         }
     }
 
-    /// Upserts the `profiles` row with updated body stats.
-    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
+    /// Upserts the `profiles` row with updated display name and body stats.
+    private func upsertProfile(userId: UUID, input: MacroCalculator.Input, displayName: String?) async throws -> UserProfile {
         struct ProfileUpsert: Encodable {
-            let id:         UUID
-            let height_cm:  Int
-            let weight_kg:  Int
-            let birthdate:  String
-            let updated_at: Date
+            let id:           UUID
+            let display_name: String?
+            let height_cm:    Int
+            let weight_kg:    Int
+            let birthdate:    String
+            let updated_at:   Date
         }
         let row = ProfileUpsert(
-            id:         userId,
-            height_cm:  Int(input.heightCm.rounded()),
-            weight_kg:  Int(input.weightKg.rounded()),
-            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
-            updated_at: Date()
+            id:           userId,
+            display_name: displayName,
+            height_cm:    Int(input.heightCm.rounded()),
+            weight_kg:    Int(input.weightKg.rounded()),
+            birthdate:    "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            updated_at:   Date()
         )
         return try await SupabaseClientProvider.shared
             .from("profiles")

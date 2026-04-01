@@ -62,6 +62,16 @@ struct DashboardView: View {
                         // insetGrouped section container visually invisible — the cards
                         // draw their own gray surfaces on top.
                         Section {
+                            // Personalized time-of-day greeting. Disappears gracefully
+                            // when no display name is set — falls back to generic salutation.
+                            Text(greetingText())
+                                .font(.title2.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .listRowBackground(Color(UIColor.systemBackground))
+                                .listRowSeparator(.hidden)
+                                .listRowInsets(EdgeInsets(top: 8, leading: 4, bottom: 0, trailing: 4))
+
                             CalorieSummaryCard(summary: summary)
                                 .listRowBackground(Color(UIColor.systemBackground))
                                 .listRowSeparator(.hidden)
@@ -175,6 +185,33 @@ struct DashboardView: View {
             .padding(.trailing, 24)
             .padding(.bottom, 16)
         }
+    }
+
+    // MARK: - Greeting
+
+    /// Returns a time-of-day salutation, personalized when the user has a display name.
+    ///
+    /// - Parameter date: The reference date (defaults to now). Accepting a parameter
+    ///   keeps the logic testable and makes it straightforward to add special-case
+    ///   states in future — for example, checking `profile.birthdate` here for a
+    ///   "Happy birthday, [Name]" greeting without restructuring the call site.
+    private func greetingText(at date: Date = Date()) -> String {
+        let name = authManager.profile?.displayName?
+            .trimmingCharacters(in: .whitespaces)
+
+        // Future: compare `authManager.profile?.birthdate` against today's
+        // month-day here to show a birthday greeting when the date matches.
+
+        let hour = Calendar.current.component(.hour, from: date)
+        let salutation: String
+        switch hour {
+        case 5..<12:  salutation = "Good morning"
+        case 12..<17: salutation = "Good afternoon"
+        default:      salutation = "Good evening"
+        }
+
+        guard let name, !name.isEmpty else { return salutation }
+        return "\(salutation), \(name)"
     }
 
     // MARK: - Food log section headers
@@ -500,7 +537,7 @@ private struct ProgressRing: View {
 // MARK: - Preview helpers
 
 private extension DashboardView {
-    static func previewAuth() -> AuthManager {
+    static func previewAuth(displayName: String? = "Alex") -> AuthManager {
         let auth = AuthManager(previewMode: true)
         auth.markOnboarded(
             goal: UserGoal(
@@ -512,7 +549,7 @@ private extension DashboardView {
                 createdAt: Date(), updatedAt: Date()
             ),
             profile: UserProfile(
-                id: UUID(), displayName: nil,
+                id: UUID(), displayName: displayName,
                 heightCm: nil, weightKg: nil, birthdate: nil,
                 createdAt: Date(), updatedAt: Date()
             )
@@ -560,16 +597,16 @@ private extension DashboardView {
 
 // MARK: - Preview
 
-#Preview("Populated") {
+#Preview("Populated — with name") {
     DashboardView()
-        .environment(DashboardView.previewAuth())
+        .environment(DashboardView.previewAuth(displayName: "Alex"))
         .environment(FoodLogStore(previewLogs: DashboardView.previewLogs))
         .environment(AppRouter())
 }
 
-#Preview("Empty state") {
+#Preview("Empty state — no name") {
     DashboardView()
-        .environment(DashboardView.previewAuth())
+        .environment(DashboardView.previewAuth(displayName: nil))
         .environment(FoodLogStore())
         .environment(AppRouter())
 }

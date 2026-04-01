@@ -74,23 +74,37 @@ struct SettingsView: View {
     private var accountSection: some View {
         Section {
             HStack(spacing: 14) {
-                // Avatar circle — uses email initial as identity marker.
-                // No profile photo in MVP; no network call required.
+                // Avatar circle — uses display name initial when available,
+                // otherwise falls back to the email initial.
                 ZStack {
                     Circle()
                         .fill(Color(.systemGray5))
                         .frame(width: 52, height: 52)
-                    Text(emailInitial)
+                    Text(avatarInitial)
                         .font(.title2.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(authManager.currentUserEmail ?? "Signed in")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                    // When a display name exists, show it prominently and
+                    // demote the email to a secondary line beneath it.
+                    if let name = authManager.profile?.displayName,
+                       !name.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text(name)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.primary)
+                        Text(authManager.currentUserEmail ?? "")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    } else {
+                        Text(authManager.currentUserEmail ?? "Signed in")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
 
                     if let created = authManager.profile?.createdAt {
                         Text("Member since \(memberYear(created))")
@@ -343,9 +357,14 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    /// First letter of the email address, uppercased, for the avatar circle.
-    private var emailInitial: String {
-        authManager.currentUserEmail?.first.map(String.init)?.uppercased() ?? "?"
+    /// First letter of the display name (preferred) or email address, uppercased.
+    /// Used as the identity marker in the avatar circle.
+    private var avatarInitial: String {
+        if let name = authManager.profile?.displayName,
+           let first = name.trimmingCharacters(in: .whitespaces).first {
+            return String(first).uppercased()
+        }
+        return authManager.currentUserEmail?.first.map(String.init)?.uppercased() ?? "?"
     }
 
     /// Formats a date to its 4-digit year string, e.g. "2024".
@@ -401,7 +420,30 @@ struct SettingsView: View {
 
 // MARK: - Preview
 
-#Preview("With goal") {
+#Preview("With goal and name") {
+    let auth = AuthManager(previewMode: true)
+    auth.markOnboarded(
+        goal: UserGoal(
+            id: UUID(), userId: UUID(),
+            goalType: .fatLoss,
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: 2100, dailyProtein: 165,
+            dailyCarbs: 220, dailyFat: 65,
+            createdAt: Date(), updatedAt: Date()
+        ),
+        profile: UserProfile(
+            id: UUID(), displayName: "Alex",
+            heightCm: 178, weightKg: 82, birthdate: "1992-01-01",
+            createdAt: Date(), updatedAt: Date()
+        )
+    )
+    return SettingsView()
+        .environment(auth)
+        .environment(HealthKitService())
+        .environment(NotificationService())
+}
+
+#Preview("With goal, no name") {
     let auth = AuthManager(previewMode: true)
     auth.markOnboarded(
         goal: UserGoal(

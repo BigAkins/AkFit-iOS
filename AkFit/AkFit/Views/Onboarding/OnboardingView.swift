@@ -10,19 +10,20 @@ private let onboardingLogger = Logger(
 /// Multi-step onboarding flow.
 ///
 /// Step order:
-///   1. Sex selection
-///   2. Height & weight (birth year · height · weight)
-///   3. Goal type
-///   4. Activity level
-///   5. Pace  (skipped for maintenance)
-///   6. Results + persist
+///   1. Name  (preferred display name — optional / skippable)
+///   2. Sex selection
+///   3. Height & weight (birth year · height · weight)
+///   4. Goal type
+///   5. Activity level
+///   6. Pace  (skipped for maintenance)
+///   7. Results + persist
 struct OnboardingView: View {
     @Environment(AuthManager.self) private var authManager
     @State private var data = OnboardingData()
-    @State private var step: Step = .sex
+    @State private var step: Step = .name
 
     enum Step: Int, CaseIterable {
-        case sex, bodyStats, goal, activity, pace, results
+        case name, sex, bodyStats, goal, activity, pace, results
     }
 
     var body: some View {
@@ -76,7 +77,7 @@ struct OnboardingView: View {
     // MARK: - Step list (dynamic: pace omitted for maintenance)
 
     private var visibleSteps: [Step] {
-        var steps: [Step] = [.sex, .bodyStats, .goal, .activity]
+        var steps: [Step] = [.name, .sex, .bodyStats, .goal, .activity]
         if data.goalType != .maintenance { steps.append(.pace) }
         steps.append(.results)
         return steps
@@ -87,6 +88,7 @@ struct OnboardingView: View {
     @ViewBuilder
     private var stepContent: some View {
         switch step {
+        case .name:      NameStepView(data: data, onNext: advance)
         case .sex:       SexStepView(data: data, onNext: advance)
         case .bodyStats: BodyStatsStepView(data: data, onNext: advance)
         case .goal:      GoalStepView(data: data, onNext: advance)
@@ -182,7 +184,38 @@ private struct CTAButton: View {
     }
 }
 
-// MARK: - Step 1: Sex
+// MARK: - Step 1: Name
+
+/// Asks for the user's preferred first name before the metabolic questions.
+/// The step is lightweight and always skippable — "Continue" is never disabled —
+/// so users who prefer not to share a name can move on immediately.
+private struct NameStepView: View {
+    @Bindable var data: OnboardingData
+    let onNext: () -> Void
+
+    var body: some View {
+        OnboardingStepLayout(
+            title: "What should we\ncall you?",
+            subtitle: "Optional — used to personalize your experience."
+        ) {
+            TextField("Your name", text: $data.displayName)
+                .font(.body)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
+                .background(Color(.systemGray6))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+                .padding(.horizontal, 24)
+                .textContentType(.name)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .onSubmit(onNext)
+        } footer: {
+            CTAButton(label: "Continue", action: onNext)
+        }
+    }
+}
+
+// MARK: - Step 2: Sex
 
 private struct SexStepView: View {
     @Bindable var data: OnboardingData
@@ -532,10 +565,13 @@ private struct ResultsStepView: View {
         isSaving = true
         errorMessage = nil
 
+        let trimmedName = data.displayName.trimmingCharacters(in: .whitespaces)
+        let displayName: String? = trimmedName.isEmpty ? nil : trimmedName
+
         Task { @MainActor in
             defer { isSaving = false }
             do {
-                let profile = try await upsertProfile(userId: userId, input: input)
+                let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
@@ -547,22 +583,28 @@ private struct ResultsStepView: View {
         }
     }
 
-    private func upsertProfile(userId: UUID, input: MacroCalculator.Input) async throws -> UserProfile {
+    private func upsertProfile(
+        userId: UUID,
+        input: MacroCalculator.Input,
+        displayName: String?
+    ) async throws -> UserProfile {
         struct ProfileInsert: Encodable {
-            let id: UUID
-            let height_cm: Int
-            let weight_kg: Int
-            let birthdate: String   // "YYYY-01-01" — we collect birth year, not exact date
-            let updated_at: Date
+            let id:           UUID
+            let display_name: String?
+            let height_cm:    Int
+            let weight_kg:    Int
+            let birthdate:    String   // "YYYY-01-01" — we collect birth year, not exact date
+            let updated_at:   Date
         }
         let row = ProfileInsert(
-            id:         userId,
-            height_cm:  Int(input.heightCm.rounded()),
-            weight_kg:  Int(input.weightKg.rounded()),
+            id:           userId,
+            display_name: displayName,
+            height_cm:    Int(input.heightCm.rounded()),
+            weight_kg:    Int(input.weightKg.rounded()),
             // Construct a date string from birth year. Jan 1 is used as a proxy
             // since we only collect the year during onboarding.
-            birthdate:  "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
-            updated_at: Date()
+            birthdate:    "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            updated_at:   Date()
         )
         return try await SupabaseClientProvider.shared
             .from("profiles")
@@ -672,7 +714,7 @@ private struct MacroChip: View {
 
 // MARK: - Preview
 
-#Preview("Step 1 — Sex") {
+#Preview("Step 1 — Name") {
     OnboardingView()
         .environment(AuthManager(previewMode: true))
 }

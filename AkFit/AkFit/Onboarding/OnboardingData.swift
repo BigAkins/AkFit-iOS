@@ -18,6 +18,9 @@ final class OnboardingData {
 
     // MARK: - Collected fields
 
+    /// User's preferred display name. Optional — empty string means not provided.
+    var displayName: String = ""
+
     var sex: UserGoal.Sex?
     var birthYear: Int = Calendar.current.component(.year, from: Date()) - 30
 
@@ -88,6 +91,7 @@ extension OnboardingData {
         d.pace     = goal.targetPace ?? .moderate
 
         if let profile {
+            d.displayName = profile.displayName ?? ""
             if let cm = profile.heightCm {
                 let (ft, ins) = cmToFeetInches(cm)
                 d.heightFeet   = ft
