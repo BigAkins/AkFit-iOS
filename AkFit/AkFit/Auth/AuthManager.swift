@@ -210,6 +210,31 @@ final class AuthManager {
         )
     }
 
+    /// Signs in via Google OAuth using a PKCE flow presented inside an
+    /// `ASWebAuthenticationSession` — no browser switch, no URL scheme registration
+    /// in Info.plist required.
+    ///
+    /// Supabase's `signInWithOAuth(provider:redirectTo:)` wraps the
+    /// `ASWebAuthenticationSession` and exchanges the code for a session internally.
+    /// When it completes, the session is stored and `authStateChanges` emits `.signedIn`,
+    /// which the observer in `startAuthObserver()` picks up to update state and let
+    /// `RootView` re-route automatically.
+    ///
+    /// **One-time setup required (developer):**
+    /// 1. Enable Google as an OAuth provider in the Supabase project dashboard
+    ///    (Authentication → Providers → Google; paste the Google Cloud Console
+    ///    Web Client ID and Client Secret).
+    /// 2. Add `akfit://auth-callback` to the Supabase dashboard's "Redirect URLs" list
+    ///    (Authentication → URL Configuration → Redirect URLs).
+    func signInWithGoogle() async throws {
+        try await SupabaseClientProvider.shared.auth.signInWithOAuth(
+            provider: .google,
+            redirectTo: URL(string: "akfit://auth-callback")!
+        )
+        // Session stored internally; authStateChanges fires with .signedIn.
+        // RootView re-routes automatically via AuthManager state.
+    }
+
     // MARK: - Post-onboarding
 
     /// Called by `OnboardingView` after persisting a new goal, so the app

@@ -167,6 +167,28 @@ struct AuthView: View {
                 .frame(height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .disabled(isSubmitting)
+
+                // Sign in with Google via Supabase OAuth / ASWebAuthenticationSession.
+                // Replace the "G" text with Image("google_logo") once the asset is added.
+                Button(action: signInWithGoogle) {
+                    HStack(spacing: 10) {
+                        Text("G")
+                            .font(.system(size: 17, weight: .bold))
+                            .foregroundStyle(Color(red: 0.26, green: 0.52, blue: 0.96))
+                        Text(mode == .signIn ? "Sign in with Google" : "Sign up with Google")
+                            .font(.body.weight(.medium))
+                            .foregroundStyle(Color(.label))
+                    }
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 52)
+                    .background(Color(.systemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .strokeBorder(Color(.separator), lineWidth: 1)
+                    )
+                }
+                .disabled(isSubmitting)
             }
             .padding(.horizontal, 24)
             .padding(.bottom, 48)
@@ -348,6 +370,32 @@ struct AuthView: View {
                     nsError.code  == ASAuthorizationError.canceled.rawValue)
             else { return }
             errorMessage = "Sign in with Apple failed. Please try again."
+        }
+    }
+
+    // MARK: - Sign in with Google
+
+    /// Triggers the Google OAuth flow via Supabase's built-in `ASWebAuthenticationSession`
+    /// integration. No browser switch or custom URL scheme registration required.
+    ///
+    /// On success, `authStateChanges` fires and `RootView` re-routes automatically.
+    /// Cancellation (user dismisses the sheet) is silently ignored.
+    private func signInWithGoogle() {
+        errorMessage = nil
+        isSubmitting = true
+        Task {
+            defer { isSubmitting = false }
+            do {
+                try await authManager.signInWithGoogle()
+                // authStateChanges fires → RootView re-routes automatically.
+            } catch {
+                // ASWebAuthenticationSession cancel — don't surface an error.
+                if let webAuthError = error as? ASWebAuthenticationSessionError,
+                   webAuthError.code == .canceledLogin {
+                    return
+                }
+                errorMessage = friendlyError(error)
+            }
         }
     }
 
