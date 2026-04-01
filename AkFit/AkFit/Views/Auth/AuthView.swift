@@ -174,7 +174,11 @@ struct AuthView: View {
                 // Sign in with Google via Supabase OAuth / ASWebAuthenticationSession.
                 Button(action: signInWithGoogle) {
                     HStack(spacing: 10) {
-                        GoogleGLogo(size: 22)
+                        Image("Google PNG")
+                            .resizable()
+                            .renderingMode(.original)
+                            .scaledToFit()
+                            .frame(width: 20, height: 20)
                         Text(mode == .signIn ? "Sign in with Google" : "Sign up with Google")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(Color(UIColor.systemBackground))
@@ -452,64 +456,6 @@ struct AuthView: View {
     }
 }
 
-// MARK: - Google G logo
-
-/// Draws the four-colour Google "G" mark using Canvas — no image asset required.
-///
-/// Four arc segments (green → yellow → red → blue) form a ring with an ~80° gap
-/// at the right side (the G opening). A horizontal blue bar extends from the
-/// horizontal centre of the circle to its right outer edge, completing the G shape.
-///
-/// Colours match Google's published brand hex values:
-///   Blue #4285F4 · Red #EA4335 · Yellow #FBBC05 · Green #34A853
-private struct GoogleGLogo: View {
-    var size: CGFloat = 22
-
-    private static let gBlue   = Color(red: 0.259, green: 0.522, blue: 0.957) // #4285F4
-    private static let gRed    = Color(red: 0.918, green: 0.263, blue: 0.208) // #EA4335
-    private static let gYellow = Color(red: 0.984, green: 0.737, blue: 0.020) // #FBBC05
-    private static let gGreen  = Color(red: 0.204, green: 0.659, blue: 0.325) // #34A853
-
-    var body: some View {
-        Canvas { ctx, sz in
-            let cx = sz.width  / 2
-            let cy = sz.height / 2
-            let r  = sz.width  * 0.46   // outer radius
-            let lw = r * 0.40           // ring stroke width
-            let ar = r - lw / 2         // arc centre radius
-
-            // In SwiftUI's Y-down coordinate system, `clockwise: false` draws
-            // arcs that appear clockwise on screen (opposite of math convention).
-            func strokeArc(_ color: Color, from a: Double, to b: Double) {
-                var p = Path()
-                p.addArc(center: .init(x: cx, y: cy), radius: ar,
-                         startAngle: .degrees(a), endAngle: .degrees(b),
-                         clockwise: false)
-                ctx.stroke(p, with: .color(color),
-                           style: .init(lineWidth: lw, lineCap: .butt))
-            }
-
-            // Clockwise arcs; 0° = 3 o'clock, angles increase clockwise on screen.
-            // 80° gap at right (320° → 40°) forms the G opening.
-            strokeArc(Self.gGreen,  from:  40, to: 120)  // ~4 o'clock → 7 o'clock
-            strokeArc(Self.gYellow, from: 120, to: 195)  // 7 o'clock → ~9:30
-            strokeArc(Self.gRed,    from: 195, to: 305)  // ~9:30 → ~1 o'clock (through top)
-            strokeArc(Self.gBlue,   from: 305, to: 320)  // ~1 o'clock → ~2 o'clock
-
-            // Horizontal bar — blue, centred vertically.
-            // Runs from the horizontal centre (cx) to the outer right edge of the ring (cx + r).
-            // Previously barW collapsed to ~0 because `r` (a radius) was incorrectly used as
-            // an x-coordinate in the width calculation; fixed by using `r` directly as the width.
-            let barH = lw
-            let barX = cx
-            let barW = r
-            var bar  = Path()
-            bar.addRect(CGRect(x: barX, y: cy - barH / 2, width: barW, height: barH))
-            ctx.fill(bar, with: .color(Self.gBlue))
-        }
-        .frame(width: size, height: size)
-    }
-}
 
 #Preview {
     AuthView()
