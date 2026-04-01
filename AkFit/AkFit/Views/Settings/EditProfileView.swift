@@ -11,9 +11,9 @@ import Supabase
 /// - PATCHes the `goals` row with recalculated daily macro targets so the
 ///   dashboard immediately reflects the change.
 ///
-/// **Sex / activity level:** these are not stored in the schema. They default
-/// to Male / Moderately Active when the sheet opens. The user must confirm or
-/// adjust them before saving — a footer note makes this explicit.
+/// **Sex / activity level:** stored in `profiles.sex` and `profiles.activity_level`
+/// since migration 20260331000001. Restored from the profile on open; persisted
+/// on every save alongside the other body stats.
 struct EditProfileView: View {
     let goal: UserGoal
     let profile: UserProfile?
@@ -126,7 +126,7 @@ struct EditProfileView: View {
                 } header: {
                     Text("Profile")
                 } footer: {
-                    Text("Sex and activity level aren't saved to your account — they default to Male / Moderately Active each time you open this screen. Adjust if needed before saving.")
+                    Text("Name is optional. Height, weight, birthdate, sex, and activity level are used to calculate your daily calorie and macro targets.")
                 }
 
                 if let saveError {
@@ -224,7 +224,8 @@ struct EditProfileView: View {
         }
     }
 
-    /// Upserts the `profiles` row with updated display name, body stats, and full birthdate.
+    /// Upserts the `profiles` row with updated display name, body stats,
+    /// full birthdate, sex, and activity level.
     private func upsertProfile(
         userId:      UUID,
         input:       MacroCalculator.Input,
@@ -232,20 +233,24 @@ struct EditProfileView: View {
         birthdate:   String
     ) async throws -> UserProfile {
         struct ProfileUpsert: Encodable {
-            let id:           UUID
-            let display_name: String?
-            let height_cm:    Int
-            let weight_kg:    Int
-            let birthdate:    String
-            let updated_at:   Date
+            let id:             UUID
+            let display_name:   String?
+            let height_cm:      Int
+            let weight_kg:      Int
+            let birthdate:      String
+            let sex:            String
+            let activity_level: String
+            let updated_at:     Date
         }
         let row = ProfileUpsert(
-            id:           userId,
-            display_name: displayName,
-            height_cm:    Int(input.heightCm.rounded()),
-            weight_kg:    Int(input.weightKg.rounded()),
-            birthdate:    birthdate,
-            updated_at:   Date()
+            id:             userId,
+            display_name:   displayName,
+            height_cm:      Int(input.heightCm.rounded()),
+            weight_kg:      Int(input.weightKg.rounded()),
+            birthdate:      birthdate,
+            sex:            input.sex.rawValue,
+            activity_level: input.activityLevel.rawValue,
+            updated_at:     Date()
         )
         return try await SupabaseClientProvider.shared
             .from("profiles")

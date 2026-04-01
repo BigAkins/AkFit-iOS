@@ -597,22 +597,26 @@ private struct ResultsStepView: View {
         displayName: String?
     ) async throws -> UserProfile {
         struct ProfileInsert: Encodable {
-            let id:           UUID
-            let display_name: String?
-            let height_cm:    Int
-            let weight_kg:    Int
-            let birthdate:    String   // "YYYY-01-01" — we collect birth year, not exact date
-            let updated_at:   Date
+            let id:             UUID
+            let display_name:   String?
+            let height_cm:      Int
+            let weight_kg:      Int
+            let birthdate:      String
+            let sex:            String
+            let activity_level: String
+            let updated_at:     Date
         }
         let row = ProfileInsert(
-            id:           userId,
-            display_name: displayName,
-            height_cm:    Int(input.heightCm.rounded()),
-            weight_kg:    Int(input.weightKg.rounded()),
+            id:             userId,
+            display_name:   displayName,
+            height_cm:      Int(input.heightCm.rounded()),
+            weight_kg:      Int(input.weightKg.rounded()),
             // Construct a date string from birth year. Jan 1 is used as a proxy
-            // since we only collect the year during onboarding.
-            birthdate:    "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
-            updated_at:   Date()
+            // since onboarding collects year only; Edit Profile stores the full date.
+            birthdate:      "\(Calendar.current.component(.year, from: Date()) - input.age)-01-01",
+            sex:            input.sex.rawValue,
+            activity_level: input.activityLevel.rawValue,
+            updated_at:     Date()
         )
         return try await SupabaseClientProvider.shared
             .from("profiles")

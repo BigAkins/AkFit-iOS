@@ -11,6 +11,12 @@ struct UserProfile: Codable, Identifiable, Sendable {
     /// PostgREST returns PostgreSQL `date` columns as plain date strings, not
     /// timestamps, so this is stored as `String?` to avoid decoder mismatches.
     var birthdate: String?
+    /// Biological sex — used by MacroCalculator (Mifflin-St Jeor BMR constant).
+    /// Stored in `profiles.sex` as "male" | "female".
+    var sex: UserGoal.Sex?
+    /// Lifestyle activity level — used by MacroCalculator (TDEE multiplier).
+    /// Stored in `profiles.activity_level`.
+    var activityLevel: UserGoal.ActivityLevel?
     let createdAt: Date
     var updatedAt: Date
 
@@ -32,12 +38,14 @@ struct UserProfile: Codable, Identifiable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
-        case displayName = "display_name"
-        case heightCm    = "height_cm"
-        case weightKg    = "weight_kg"
+        case displayName   = "display_name"
+        case heightCm      = "height_cm"
+        case weightKg      = "weight_kg"
         case birthdate
-        case createdAt   = "created_at"
-        case updatedAt   = "updated_at"
+        case sex
+        case activityLevel = "activity_level"
+        case createdAt     = "created_at"
+        case updatedAt     = "updated_at"
     }
 }
 
@@ -50,13 +58,15 @@ extension UserProfile {
     /// initialiser used by previews.
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id          = try c.decode(UUID.self,    forKey: .id)
-        displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
-        heightCm    = Self.decodeFlexDouble(c, key: .heightCm)
-        weightKg    = Self.decodeFlexDouble(c, key: .weightKg)
-        birthdate   = try c.decodeIfPresent(String.self, forKey: .birthdate)
-        createdAt   = try c.decode(Date.self,    forKey: .createdAt)
-        updatedAt   = try c.decode(Date.self,    forKey: .updatedAt)
+        id            = try c.decode(UUID.self,    forKey: .id)
+        displayName   = try c.decodeIfPresent(String.self,               forKey: .displayName)
+        heightCm      = Self.decodeFlexDouble(c, key: .heightCm)
+        weightKg      = Self.decodeFlexDouble(c, key: .weightKg)
+        birthdate     = try c.decodeIfPresent(String.self,               forKey: .birthdate)
+        sex           = try c.decodeIfPresent(UserGoal.Sex.self,          forKey: .sex)
+        activityLevel = try c.decodeIfPresent(UserGoal.ActivityLevel.self, forKey: .activityLevel)
+        createdAt     = try c.decode(Date.self,    forKey: .createdAt)
+        updatedAt     = try c.decode(Date.self,    forKey: .updatedAt)
     }
 
     private static func decodeFlexDouble(

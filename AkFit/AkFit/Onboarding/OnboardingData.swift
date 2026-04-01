@@ -84,19 +84,19 @@ extension OnboardingData {
     /// the user's `UserProfile`.
     ///
     /// - Goal parameters (goalType, targetPace) come from `goal`.
-    /// - Body stats (height, weight, birthdate) come from `profile`.
-    /// - Sex defaults to `.male` and activity level to `.moderate` — neither
-    ///   is stored in the schema. Edit flows should prompt the user to confirm.
+    /// - Body stats (height, weight, birthdate, sex, activityLevel) come from `profile`.
+    /// - Sex and activity level fall back to Male / Moderate when the profile
+    ///   row pre-dates the migration that added those columns (null values).
     static func from(goal: UserGoal, profile: UserProfile? = nil) -> OnboardingData {
         let d = OnboardingData()
         d.goalType = goal.goalType
         d.pace     = goal.targetPace ?? .moderate
 
-        // Sex and activity level are not stored in the schema.
-        // Default to reasonable values so the form is immediately usable;
-        // the user should confirm or adjust before saving.
-        d.sex           = .male
-        d.activityLevel = .moderate
+        // Restore sex and activity level from the profile if already stored.
+        // Fall back to Male / Moderate only for accounts that pre-date the
+        // migration that added these columns (their profiles will have nil).
+        d.sex           = profile?.sex           ?? .male
+        d.activityLevel = profile?.activityLevel ?? .moderate
 
         if let profile {
             d.displayName = profile.displayName ?? ""
