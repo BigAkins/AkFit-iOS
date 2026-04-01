@@ -28,10 +28,22 @@ struct UserProfile: Codable, Identifiable, Sendable {
         return Int(birthdate.prefix(4))
     }
 
-    /// Approximate age in whole years, derived from `birthdate`.
+    /// Exact age in whole years, derived from the full "YYYY-MM-DD" `birthdate`.
+    ///
+    /// Uses `Calendar.dateComponents` so the result accounts for whether the
+    /// birthday has already passed this year — e.g. born June 15 1992, today
+    /// March 31 2026 → 33, not 34.
     var age: Int? {
-        guard let year = birthYear else { return nil }
-        return Calendar.current.component(.year, from: Date()) - year
+        guard let birthdate else { return nil }
+        let parts = birthdate.split(separator: "-")
+        guard parts.count == 3,
+              let year  = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day   = Int(parts[2]) else { return nil }
+        var comps  = DateComponents()
+        comps.year = year; comps.month = month; comps.day = day
+        guard let birthDate = Calendar.current.date(from: comps) else { return nil }
+        return Calendar.current.dateComponents([.year], from: birthDate, to: Date()).year
     }
 
     // MARK: - Coding keys

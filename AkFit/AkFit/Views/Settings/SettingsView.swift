@@ -12,6 +12,7 @@ import SwiftUI
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
+    @Environment(BodyweightStore.self)     private var weightStore
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
 
@@ -40,6 +41,9 @@ struct SettingsView: View {
             .onAppear {
                 healthKit.checkAuthorization()
                 Task { await notifications.checkAuthorization() }
+                if let userId = authManager.currentUserId {
+                    Task { await weightStore.refreshWeek(userId: userId) }
+                }
             }
             .navigationTitle("Settings")
             .sheet(isPresented: $showEditGoal) {
@@ -130,7 +134,9 @@ struct SettingsView: View {
                 if let cm = profile.heightCm {
                     LabeledContent("Height", value: formattedHeight(cm))
                 }
-                if let kg = profile.weightKg {
+                // Prefer the latest bodyweight log over the profile snapshot.
+                // Falls back to profile.weightKg if no log exists.
+                if let kg = weightStore.weekLogs.last?.weightKg ?? profile.weightKg {
                     LabeledContent("Weight", value: formattedWeight(kg))
                 }
                 Button {
