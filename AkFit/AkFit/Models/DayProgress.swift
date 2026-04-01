@@ -22,44 +22,54 @@ struct DayProgress: Identifiable {
 // MARK: - Factory
 
 extension DayProgress {
-    /// Groups `logs` into the 7 most recent calendar days (today and the 6 preceding
-    /// days) and returns one `DayProgress` per day, ordered oldest-to-newest.
+    /// Groups `logs` into the `days` most recent calendar days (today and the
+    /// preceding `days - 1` days) and returns one `DayProgress` per day,
+    /// ordered oldest-to-newest.
     ///
-    /// Days with no matching log entries are included with all-zero totals so the
-    /// Progress chart always has a consistent 7-bar structure.
+    /// Days with no matching log entries are included with all-zero totals so
+    /// the Progress chart always has a consistent bar structure.
     ///
     /// **Timezone:** uses `calendar` (defaults to `Calendar.current`) for day
-    /// boundaries, matching the device local time zone. `FoodLog.loggedAt` values
-    /// are `Date` (UTC) and are correctly mapped to their local calendar day.
-    static func buildWeek(
+    /// boundaries, matching the device local time zone. `FoodLog.loggedAt`
+    /// values are `Date` (UTC) and are correctly mapped to their local calendar
+    /// day.
+    static func build(
+        days: Int,
         from logs: [FoodLog],
         calendar: Calendar = .current
     ) -> [DayProgress] {
-        let today = calendar.startOfDay(for: Date())
+        let today   = calendar.startOfDay(for: Date())
+        let offset  = -(days - 1)
 
-        // Build the 7 day anchors: [today-6, today-5, ..., today]
-        let days: [Date] = (0..<7).compactMap {
-            calendar.date(byAdding: .day, value: $0 - 6, to: today)
+        // Build day anchors: [today-(days-1), ..., today]
+        let anchors: [Date] = (0..<days).compactMap {
+            calendar.date(byAdding: .day, value: offset + $0, to: today)
         }
 
         // Group logs by their device-local midnight.
-        // FoodLog.loggedAt is a `Date` (a point in time). startOfDay maps it
-        // to the correct local calendar day regardless of the stored UTC value.
         var grouped: [Date: [FoodLog]] = [:]
         for log in logs {
             let day = calendar.startOfDay(for: log.loggedAt)
             grouped[day, default: []].append(log)
         }
 
-        return days.map { day in
+        return anchors.map { day in
             let dayLogs = grouped[day] ?? []
             return DayProgress(
                 date:          day,
-                totalCalories: dayLogs.reduce(0)   { $0 + $1.calories },
+                totalCalories: dayLogs.reduce(0)       { $0 + $1.calories },
                 totalProteinG: Int(dayLogs.reduce(0.0) { $0 + $1.proteinG }.rounded()),
-                totalCarbsG:   Int(dayLogs.reduce(0.0) { $0 + $1.carbsG }.rounded()),
-                totalFatG:     Int(dayLogs.reduce(0.0) { $0 + $1.fatG }.rounded())
+                totalCarbsG:   Int(dayLogs.reduce(0.0) { $0 + $1.carbsG  }.rounded()),
+                totalFatG:     Int(dayLogs.reduce(0.0) { $0 + $1.fatG    }.rounded())
             )
         }
+    }
+
+    /// Convenience wrapper — builds the standard 7-day window.
+    static func buildWeek(
+        from logs: [FoodLog],
+        calendar: Calendar = .current
+    ) -> [DayProgress] {
+        build(days: 7, from: logs, calendar: calendar)
     }
 }

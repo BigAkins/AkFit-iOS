@@ -1,42 +1,72 @@
 import SwiftUI
 import Charts
 
-/// 7-day calorie and macro progress screen.
+// MARK: - History range
+
+private enum HistoryRange: Int, CaseIterable, Identifiable {
+    case week    = 7
+    case month   = 30
+    case quarter = 90
+
+    var id: Int { rawValue }
+
+    /// Human-readable title shown in chart card headers.
+    var title: String {
+        switch self {
+        case .week:    return "7 days"
+        case .month:   return "30 days"
+        case .quarter: return "90 days"
+        }
+    }
+
+    /// Short label for the segmented control.
+    var label: String {
+        switch self {
+        case .week:    return "7d"
+        case .month:   return "30d"
+        case .quarter: return "90d"
+        }
+    }
+}
+
+// MARK: - ProgressTabView
+
+/// Calorie and macro progress screen with a selectable history range (7 / 30 / 90 days).
 ///
 /// Named `ProgressTabView` (not `ProgressView`) to avoid shadowing SwiftUI's
 /// built-in `ProgressView`.
 ///
-/// **Data flow:** `FoodLogStore.weekLogs` is fetched via `.task` on first appear
-/// and kept current by `FoodLogStore.insert`/`delete` after each mutation.
-/// `DayProgress.buildWeek` groups those raw logs into 7 daily totals in memory —
-/// no Supabase aggregation needed.
+/// **Data flow:** `FoodLogStore.weekLogs` is fetched via `.task(id: selectedRange)`
+/// so the task re-runs whenever the user switches ranges. `DayProgress.build`
+/// groups raw logs into daily totals in memory — no Supabase aggregation needed.
 ///
 /// **Interaction:** tapping a bar in the calorie chart selects that day. The
 /// day-detail section below the chart shows calorie and macro cards for the
-/// selected day, defaulting to today on first appear.
+/// selected day, defaulting to today whenever the range changes.
 struct ProgressTabView: View {
     @Environment(FoodLogStore.self)     private var logStore
     @Environment(BodyweightStore.self)  private var weightStore
     @Environment(AuthManager.self)      private var authManager
 
+    @State private var selectedRange: HistoryRange = .week
     @State private var selectedDate  = Calendar.current.startOfDay(for: Date())
     @State private var showWeightLog = false
 
     // MARK: - Derived state
 
-    private var weekProgress: [DayProgress] {
-        DayProgress.buildWeek(from: logStore.weekLogs)
+    private var rangeProgress: [DayProgress] {
+        DayProgress.build(days: selectedRange.rawValue, from: logStore.weekLogs)
     }
 
     private var selectedDay: DayProgress? {
-        weekProgress.first { $0.date == selectedDate }
+        rangeProgress.first { $0.date == selectedDate }
     }
 
     /// Upper bound for the chart Y-axis. Always tall enough to show the target
     /// line even if all bars are 0 (e.g. on first load or a fresh account).
     private var yMax: Double {
         let targetCal  = Double(authManager.goal?.dailyCalories ?? 2000)
-        let maxLogged  = weekProgress.map { Double($0.totalCalories) }.max() ?? 0
+        let maxLogged  = rangeProgress.map { Double($0.totalCalories) }.max() ?? 0
         return max(targetCal, maxLogged) * 1.25
     }
 
@@ -46,7 +76,7 @@ struct ProgressTabView: View {
     /// `logged_at` for that calendar day. Ordered oldest → newest.
     private var weightEntries: [WeightEntry] {
         let cal = Calendar.current
-        return weekProgress.compactMap { day in
+        return rangeProgress.compactMap { day in
             let latest = weightStore.weekLogs
                 .filter { cal.isDate($0.loggedAt, inSameDayAs: day.date) }
                 .sorted { $0.loggedAt > $1.loggedAt }
@@ -102,11 +132,14 @@ struct ProgressTabView: View {
                     .presentationDetents([.medium])
             }
         }
-        .task {
+        // Re-run whenever the selected range changes: fetch the new window and
+        // reset the selected day back to today so the detail card stays valid.
+        .task(id: selectedRange) {
+            selectedDate = Calendar.current.startOfDay(for: Date())
             if let userId = authManager.currentUserId {
-                // Fetch calorie logs and weight logs concurrently.
-                async let calories: Void = logStore.refreshWeek(userId: userId)
-                async let weights:  Void = weightStore.refreshWeek(userId: userId)
+                let days = selectedRange.rawValue
+                async let calories: Void = logStore.refreshWeek(userId: userId, days: days)
+                async let weights:  Void = weightStore.refreshWeek(userId: userId, days: days)
                 _ = await (calories, weights)
             }
         }
@@ -116,17 +149,27 @@ struct ProgressTabView: View {
 
     private var calorieChartCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Calories · 7 days")
-                .font(.headline)
+            HStack {
+                Text("Calories · \(selectedRange.title)")
+                    .font(.headline)
+                Spacer()
+                Picker("Range", selection: $selectedRange) {
+                    ForEach(HistoryRange.allCases) { range in
+                        Text(range.label).tag(range)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 132)
+            }
 
             Chart {
-                ForEach(weekProgress) { day in
+                ForEach(rangeProgress) { day in
                     BarMark(
                         x: .value("Day", day.date, unit: .day),
                         y: .value("Calories", day.totalCalories)
                     )
                     .foregroundStyle(barColor(for: day))
-                    .cornerRadius(4)
+                    .cornerRadius(selectedRange == .week ? 4 : 2)
                 }
 
                 if let target = authManager.goal?.dailyCalories {
@@ -143,16 +186,12 @@ struct ProgressTabView: View {
             }
             .frame(height: 160)
             .chartYScale(domain: 0...yMax)
-            .animation(.easeOut(duration: 0.45), value: weekProgress.map(\.totalCalories))
+            .animation(.easeOut(duration: 0.45), value: rangeProgress.map(\.totalCalories))
             .animation(.easeInOut(duration: 0.2), value: selectedDate)
             .chartXAxis {
-                AxisMarks(values: weekProgress.map(\.date)) { value in
+                AxisMarks(values: xAxisTickDates) { value in
                     if let date = value.as(Date.self) {
-                        AxisValueLabel(
-                            Calendar.current.isDateInToday(date)
-                                ? "Today"
-                                : date.formatted(.dateTime.weekday(.abbreviated))
-                        )
+                        AxisValueLabel(xAxisLabel(for: date))
                     }
                 }
             }
@@ -182,14 +221,14 @@ struct ProgressTabView: View {
         return Color(.systemGray4)
     }
 
-    /// Maps a tap location in the chart overlay to the nearest week day.
+    /// Maps a tap location in the chart overlay to the nearest day in the current range.
     private func selectDay(at location: CGPoint, proxy: ChartProxy, geo: GeometryProxy) {
         let plotOrigin = geo[proxy.plotAreaFrame].origin
         let plotX = location.x - plotOrigin.x
         guard plotX >= 0, let tappedDate: Date = proxy.value(atX: plotX) else { return }
         let tappedDay = Calendar.current.startOfDay(for: tappedDate)
         // Snap to the nearest actual day in our window (handles taps between bars).
-        if let nearest = weekProgress.min(by: {
+        if let nearest = rangeProgress.min(by: {
             abs($0.date.timeIntervalSince(tappedDay)) < abs($1.date.timeIntervalSince(tappedDay))
         }) {
             selectedDate = nearest.date
@@ -348,7 +387,7 @@ struct ProgressTabView: View {
         VStack(alignment: .leading, spacing: 12) {
             // Title row — today's weight shown inline when available.
             HStack(alignment: .firstTextBaseline) {
-                Text("Weight · 7 days")
+                Text("Weight · \(selectedRange.title)")
                     .font(.headline)
                 Spacer()
                 if let lbs = todayWeightLbs {
@@ -367,9 +406,9 @@ struct ProgressTabView: View {
             }
 
             if weightEntries.isEmpty {
-                // Empty state — no data yet this week.
+                // Empty state — no data yet in the selected range.
                 VStack(spacing: 6) {
-                    Text("No weight logged this week")
+                    Text("No weight logged in this period")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     Text("Log daily to see your trend.")
@@ -402,13 +441,9 @@ struct ProgressTabView: View {
                 .chartYScale(domain: weightYDomain)
                 .animation(.easeOut(duration: 0.45), value: weightEntries.map(\.lbs))
                 .chartXAxis {
-                    AxisMarks(values: weekProgress.map(\.date)) { value in
+                    AxisMarks(values: xAxisTickDates) { value in
                         if let date = value.as(Date.self) {
-                            AxisValueLabel(
-                                Calendar.current.isDateInToday(date)
-                                    ? "Today"
-                                    : date.formatted(.dateTime.weekday(.abbreviated))
-                            )
+                            AxisValueLabel(xAxisLabel(for: date))
                         }
                     }
                 }
@@ -447,6 +482,44 @@ struct ProgressTabView: View {
         let fmt = DateFormatter()
         fmt.dateFormat = "EEEE, MMM d"
         return fmt.string(from: date)
+    }
+
+    // MARK: - X-axis helpers
+
+    /// Subset of `rangeProgress` dates used as explicit axis tick positions.
+    ///
+    /// - 7d:  all 7 days (one label per bar)
+    /// - 30d: every 7th day (~5 labels)
+    /// - 90d: every 30th day (~4 labels)
+    private var xAxisTickDates: [Date] {
+        let stride: Int
+        switch selectedRange {
+        case .week:    stride = 1
+        case .month:   stride = 7
+        case .quarter: stride = 30
+        }
+        return rangeProgress.enumerated().compactMap { i, dp in
+            i % stride == 0 ? dp.date : nil
+        }
+    }
+
+    /// Formats a tick date for the X-axis label based on the selected range.
+    private func xAxisLabel(for date: Date) -> String {
+        let cal = Calendar.current
+        switch selectedRange {
+        case .week:
+            return cal.isDateInToday(date)
+                ? "Today"
+                : date.formatted(.dateTime.weekday(.abbreviated))
+        case .month:
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM d"
+            return fmt.string(from: date)
+        case .quarter:
+            let fmt = DateFormatter()
+            fmt.dateFormat = "MMM"
+            return fmt.string(from: date)
+        }
     }
 }
 

@@ -152,12 +152,15 @@ final class FoodLogStore {
 
     // MARK: - Fetch week
 
-    func refreshWeek(userId: UUID) async {
-        // Guest path: filter from guest store by week start date.
+    /// Fetches food log entries for the past `days` calendar days (today + the
+    /// preceding `days - 1` days). Pass a different value to support 7, 30, or
+    /// 90-day history ranges in `ProgressTabView`.
+    func refreshWeek(userId: UUID, days: Int = 7) async {
+        // Guest path: filter from guest store by range start date.
         if let gs = guestStore, gs.isActive {
-            let weekStart = weekStartDate()
+            let rangeStart = rangeStartDate(days: days)
             weekLogs = gs.allFoodLogs
-                .filter { $0.loggedAt >= weekStart }
+                .filter { $0.loggedAt >= rangeStart }
                 .sorted { $0.loggedAt < $1.loggedAt }
             return
         }
@@ -168,7 +171,7 @@ final class FoodLogStore {
                 .from("food_logs")
                 .select()
                 .eq("user_id", value: userId.uuidString)
-                .gte("logged_at", value: weekStartISO())
+                .gte("logged_at", value: rangeStartISO(days: days))
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
@@ -282,11 +285,11 @@ final class FoodLogStore {
         return (start, end)
     }
 
-    /// Returns the start of the 7-day window (6 days ago, device-local midnight).
-    private func weekStartDate() -> Date {
+    /// Returns the start of the `days`-day window (device-local midnight).
+    private func rangeStartDate(days: Int) -> Date {
         let cal   = Calendar.current
         let today = cal.startOfDay(for: Date())
-        return cal.date(byAdding: .day, value: -6, to: today)!
+        return cal.date(byAdding: .day, value: -(days - 1), to: today)!
     }
 
     /// Returns ISO 8601 strings for today's range (used for Supabase queries).
@@ -297,11 +300,11 @@ final class FoodLogStore {
         return (fmt.string(from: start), fmt.string(from: end))
     }
 
-    /// Returns an ISO 8601 string for the start of the 7-day window (Supabase queries).
-    private func weekStartISO() -> String {
+    /// Returns an ISO 8601 string for the start of the `days`-day window (Supabase queries).
+    private func rangeStartISO(days: Int) -> String {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt.string(from: weekStartDate())
+        return fmt.string(from: rangeStartDate(days: days))
     }
 }
 

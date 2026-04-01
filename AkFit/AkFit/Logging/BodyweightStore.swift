@@ -58,14 +58,15 @@ final class BodyweightStore {
 
     // MARK: - Fetch
 
-    /// Fetches all bodyweight entries for `userId` in the past 7 calendar days
-    /// (today + 6 prior days, device-local time). Replaces `weekLogs` on success.
-    func refreshWeek(userId: UUID) async {
+    /// Fetches bodyweight entries for `userId` in the past `days` calendar days
+    /// (today + the preceding `days - 1` days, device-local time).
+    /// Replaces `weekLogs` on success.
+    func refreshWeek(userId: UUID, days: Int = 7) async {
         // Guest path: filter from in-memory guest store.
         if let gs = guestStore, gs.isActive {
-            let weekStart = weekStartDate()
+            let rangeStart = rangeStartDate(days: days)
             weekLogs = gs.allBodyweightLogs
-                .filter { $0.loggedAt >= weekStart }
+                .filter { $0.loggedAt >= rangeStart }
                 .sorted { $0.loggedAt < $1.loggedAt }
             return
         }
@@ -76,7 +77,7 @@ final class BodyweightStore {
                 .from("bodyweight_logs")
                 .select()
                 .eq("user_id", value: userId.uuidString)
-                .gte("logged_at", value: weekStartISO())
+                .gte("logged_at", value: rangeStartISO(days: days))
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
@@ -149,18 +150,18 @@ final class BodyweightStore {
 
     // MARK: - Private helpers
 
-    /// Returns the start of the 7-day window (6 days ago, device-local midnight).
-    private func weekStartDate() -> Date {
+    /// Returns the start of the `days`-day window (device-local midnight).
+    private func rangeStartDate(days: Int) -> Date {
         let cal   = Calendar.current
         let today = cal.startOfDay(for: Date())
-        return cal.date(byAdding: .day, value: -6, to: today)!
+        return cal.date(byAdding: .day, value: -(days - 1), to: today)!
     }
 
-    /// ISO 8601 string for midnight 6 days ago in device-local time.
-    private func weekStartISO() -> String {
+    /// ISO 8601 string for the start of the `days`-day window in device-local time.
+    private func rangeStartISO(days: Int) -> String {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fmt.string(from: weekStartDate())
+        return fmt.string(from: rangeStartDate(days: days))
     }
 }
 
