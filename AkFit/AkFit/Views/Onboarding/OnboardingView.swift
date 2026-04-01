@@ -496,9 +496,17 @@ private struct ResultsStepView: View {
         return "\(input.goalType.displayName) · \(shortPace)"
     }
 
+    /// Personalizes the heading when the user entered a name earlier in the flow.
+    /// Falls back to the generic heading when no name is available.
+    private var resultsTitle: String {
+        let name = data.displayName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return "Your daily\ntargets" }
+        return "Your targets,\n\(name)"
+    }
+
     var body: some View {
         OnboardingStepLayout(
-            title: "Your daily\ntargets",
+            title: resultsTitle,
             subtitle: contextLabel
         ) {
             if let out = output {
@@ -719,14 +727,24 @@ private struct MacroChip: View {
         .environment(AuthManager(previewMode: true))
 }
 
-/// Exercises the Results step (step 6) directly, bypassing the need to
+/// Exercises the Results step (step 7) directly, bypassing the need to
 /// step through the full onboarding flow in Xcode Canvas.
-#Preview("Step 6 — Results") {
+#Preview("Step 7 — Results") {
     let data = OnboardingData()
     data.sex           = .male
     data.goalType      = .fatLoss
     data.activityLevel = .moderate
     data.pace          = .moderate
     // heightFeet / heightInches / weightLbs / birthYear use OnboardingData defaults.
+    return ResultsStepView(data: data, authManager: AuthManager(previewMode: true))
+}
+
+#Preview("Step 7 — Results, named") {
+    let data = OnboardingData()
+    data.displayName   = "Alex"
+    data.sex           = .male
+    data.goalType      = .fatLoss
+    data.activityLevel = .moderate
+    data.pace          = .moderate
     return ResultsStepView(data: data, authManager: AuthManager(previewMode: true))
 }
