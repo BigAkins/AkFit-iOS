@@ -14,6 +14,8 @@ struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
     @Environment(FoodLogStore.self)        private var logStore
     @Environment(BodyweightStore.self)     private var weightStore
+    @Environment(DailyNoteStore.self)      private var noteStore
+    @Environment(GroceryListStore.self)    private var groceryStore
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
 
@@ -495,6 +497,8 @@ struct SettingsView: View {
     private func exitGuestMode() {
         logStore.reset()
         weightStore.reset()
+        noteStore.reset()
+        groceryStore.reset()
         authManager.exitGuestMode()
         // AuthManager sets userState = .signedOut → RootView re-routes to AuthView.
     }

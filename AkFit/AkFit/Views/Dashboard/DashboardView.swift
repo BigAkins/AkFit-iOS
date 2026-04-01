@@ -15,11 +15,13 @@ import SwiftUI
 /// **FAB action:** tapping the floating + button sets `AppRouter.selectedTab = .search`,
 /// switching the user directly into the Search tab to start logging.
 struct DashboardView: View {
-    @Environment(AuthManager.self)  private var authManager
-    @Environment(FoodLogStore.self) private var logStore
-    @Environment(AppRouter.self)    private var router
+    @Environment(AuthManager.self)     private var authManager
+    @Environment(FoodLogStore.self)    private var logStore
+    @Environment(DailyNoteStore.self)  private var noteStore
+    @Environment(AppRouter.self)       private var router
 
     @State private var showDeleteError = false
+    @State private var showNoteEditor  = false
 
     /// Targets from the active goal + consumed totals from today's log entries.
     /// Computed synchronously — no async work in the view.
@@ -148,6 +150,47 @@ struct DashboardView: View {
                                 .listSectionSeparator(.hidden)
                             }
                         }
+
+                        // ── Daily Note ─────────────────────────────────────────────
+                        // One free-text note per calendar day. Tapping the row opens
+                        // NoteEditorSheet. Empty placeholder prompts the user to add one.
+                        Section {
+                            Button {
+                                showNoteEditor = true
+                            } label: {
+                                Group {
+                                    if noteStore.todayContent.isEmpty {
+                                        Text("Tap to add a note for today…")
+                                            .foregroundStyle(.tertiary)
+                                    } else {
+                                        Text(noteStore.todayContent)
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(4)
+                                    }
+                                }
+                                .font(.body)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .multilineTextAlignment(.leading)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color(.systemGray6))
+                            .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                        } header: {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text("Today's Note")
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                    .textCase(nil)
+                                Spacer()
+                                if !noteStore.todayContent.isEmpty {
+                                    Image(systemName: "pencil")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            .padding(.bottom, 4)
+                        }
+                        .listSectionSeparator(.hidden)
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -160,7 +203,15 @@ struct DashboardView: View {
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 80) }
                 .task {
                     if let userId = authManager.currentUserId {
-                        await logStore.refreshToday(userId: userId)
+                        // Fetch today's food log and note concurrently.
+                        async let logs: Void = logStore.refreshToday(userId: userId)
+                        async let note: Void = noteStore.fetchToday(userId: userId)
+                        _ = await (logs, note)
+                    }
+                }
+                .sheet(isPresented: $showNoteEditor) {
+                    if let userId = authManager.currentUserId {
+                        NoteEditorSheet(userId: userId)
                     }
                 }
                 .alert("Couldn't remove entry", isPresented: $showDeleteError) {
@@ -555,6 +606,53 @@ private struct ProgressRing: View {
     }
 }
 
+// MARK: - Note editor sheet
+
+/// Full-screen-style sheet for editing today's free-text note.
+///
+/// Loads the current note content from `DailyNoteStore` on appear.
+/// "Done" saves and dismisses. "Cancel" dismisses without saving.
+/// The `DailyNoteStore` is read from the environment so the store stays
+/// a single source of truth — no explicit passing required.
+private struct NoteEditorSheet: View {
+    let userId: UUID
+
+    @Environment(DailyNoteStore.self) private var noteStore
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var text: String = ""
+
+    var body: some View {
+        NavigationStack {
+            TextEditor(text: $text)
+                .padding(.horizontal, 12)
+                .padding(.top, 4)
+                .navigationTitle("Today's Note")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            Task {
+                                await noteStore.save(content: trimmed, userId: userId)
+                                dismiss()
+                            }
+                        }
+                        .fontWeight(.semibold)
+                    }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { dismiss() }
+                    }
+                }
+        }
+        .onAppear {
+            // Initialise text from the store's current content so the editor
+            // starts pre-filled rather than blank.
+            text = noteStore.todayContent
+        }
+    }
+}
+
 // MARK: - Preview helpers
 
 private extension DashboardView {
@@ -639,6 +737,7 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: "Alex"))
         .environment(FoodLogStore(previewLogs: DashboardView.previewLogs))
+        .environment(DailyNoteStore())
         .environment(AppRouter())
 }
 
@@ -646,6 +745,7 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: nil))
         .environment(FoodLogStore())
+        .environment(DailyNoteStore())
         .environment(AppRouter())
 }
 
@@ -653,5 +753,6 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: "Alex", birthdateIsToday: true))
         .environment(FoodLogStore())
+        .environment(DailyNoteStore())
         .environment(AppRouter())
 }

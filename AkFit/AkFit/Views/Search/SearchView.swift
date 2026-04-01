@@ -40,10 +40,13 @@ struct SearchView: View {
 
     @Environment(FoodLogStore.self)         private var logStore
     @Environment(FavoriteFoodStore.self)    private var favStore
+    @Environment(GroceryListStore.self)     private var groceryStore
     @Environment(AuthManager.self)          private var authManager
     @Environment(HealthKitService.self)     private var healthKit
     @Environment(NotificationService.self)  private var notifications
     @Environment(AppRouter.self)            private var router
+
+    @State private var newGroceryItem: String = ""
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -117,12 +120,13 @@ struct SearchView: View {
                 }
             }
             .task {
-                // Fetch suggestions, recents, and favorites concurrently on first appear.
+                // Fetch suggestions, recents, favorites, and grocery items concurrently.
                 async let fetchedSuggestions = suggestionService.fetchSuggestions()
                 if let userId = authManager.currentUserId {
                     async let recents: Void = logStore.refreshRecents(userId: userId)
                     async let favs: Void    = favStore.refresh(userId: userId)
-                    _ = await (recents, favs)
+                    async let grocery: Void = groceryStore.fetchItems(userId: userId)
+                    _ = await (recents, favs, grocery)
                 }
                 suggestions = await fetchedSuggestions
             }
@@ -171,7 +175,7 @@ struct SearchView: View {
     // MARK: - View states
 
     /// Shown when the search field is empty.
-    /// "Recent" section appears above "Suggestions" when the user has prior logs.
+    /// Order: summary → Favorites → Recent → Grocery List → Suggestions.
     private var promptView: some View {
         List {
             summarySection
@@ -189,6 +193,7 @@ struct SearchView: View {
                     }
                 }
             }
+            groceryListSection
             if !suggestions.isEmpty {
                 Section("Suggestions") {
                     ForEach(suggestions) { food in
@@ -198,6 +203,72 @@ struct SearchView: View {
             }
         }
         .listStyle(.insetGrouped)
+    }
+
+    // MARK: - Grocery list section
+
+    /// Always-visible section in the empty state for the user's grocery list.
+    /// Shows checked items with a strikethrough. "Clear checked" appears in the
+    /// header when at least one item is checked.
+    @ViewBuilder
+    private var groceryListSection: some View {
+        Section {
+            ForEach(groceryStore.items) { item in
+                GroceryItemRow(item: item)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        guard let userId = authManager.currentUserId else { return }
+                        Task { await groceryStore.toggleItem(item, userId: userId) }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            guard let userId = authManager.currentUserId else { return }
+                            Task { await groceryStore.deleteItem(item, userId: userId) }
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                    }
+            }
+
+            // Add-item row: text field + inline confirm button.
+            HStack(spacing: 8) {
+                TextField("Add item…", text: $newGroceryItem)
+                    .onSubmit { addGroceryItem() }
+                if !newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button(action: addGroceryItem) {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
+        } header: {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Grocery List")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .textCase(nil)
+                Spacer()
+                if groceryStore.items.contains(where: \.isChecked) {
+                    Button("Clear checked") {
+                        guard let userId = authManager.currentUserId else { return }
+                        Task { await groceryStore.clearChecked(userId: userId) }
+                    }
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .textCase(nil)
+                }
+            }
+            .padding(.bottom, 2)
+        }
+    }
+
+    /// Adds the current `newGroceryItem` text as a new list entry, then clears the field.
+    private func addGroceryItem() {
+        let name = newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let userId = authManager.currentUserId else { return }
+        newGroceryItem = ""
+        Task { await groceryStore.addItem(name: name, userId: userId) }
     }
 
     /// Shown while a debounce delay or network request is in progress and
@@ -404,6 +475,31 @@ struct SearchView: View {
     }
 }
 
+// MARK: - Grocery item row
+
+/// A single row in the grocery list section.
+/// Checkbox icon reflects checked state; text uses strikethrough + secondary colour when checked.
+private struct GroceryItemRow: View {
+    let item: GroceryItem
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: item.isChecked ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(item.isChecked ? Color.green : Color(.systemGray3))
+                .font(.body)
+                .animation(.easeInOut(duration: 0.15), value: item.isChecked)
+
+            Text(item.name)
+                .font(.body)
+                .foregroundStyle(item.isChecked ? .secondary : .primary)
+                .strikethrough(item.isChecked, color: .secondary)
+                .animation(.easeInOut(duration: 0.15), value: item.isChecked)
+
+            Spacer()
+        }
+    }
+}
+
 // MARK: - Food row
 
 private struct FoodRow: View {
@@ -587,6 +683,7 @@ private extension SearchView {
     SearchView()
         .environment(FoodLogStore())
         .environment(FavoriteFoodStore())
+        .environment(GroceryListStore())
         .environment(AuthManager(previewMode: true))
         .environment(HealthKitService())
         .environment(NotificationService())
@@ -597,6 +694,7 @@ private extension SearchView {
     SearchView()
         .environment(SearchView.previewLogStore)
         .environment(FavoriteFoodStore())
+        .environment(GroceryListStore())
         .environment(SearchView.previewAuth)
         .environment(HealthKitService())
         .environment(NotificationService())

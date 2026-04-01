@@ -52,6 +52,8 @@ final class GuestDataStore {
         static let profile        = "guest.profile"
         static let foodLogs       = "guest.foodLogs"
         static let bodyweightLogs = "guest.bodyweightLogs"
+        static let dailyNotes     = "guest.dailyNotes"
+        static let groceryItems   = "guest.groceryItems"
     }
 
     private let defaults = UserDefaults.standard
@@ -106,6 +108,12 @@ final class GuestDataStore {
     /// All bodyweight entries for this guest, across all days.
     private(set) var allBodyweightLogs: [BodyweightLog]
 
+    /// Daily notes for this guest, keyed by "yyyy-MM-dd" date string.
+    private(set) var dailyNotes: [String: String]
+
+    /// All grocery list items for this guest.
+    private(set) var allGroceryItems: [GroceryItem]
+
     // MARK: - Init
 
     init() {
@@ -129,6 +137,10 @@ final class GuestDataStore {
         // Load log arrays (default to empty if nothing persisted yet).
         self.allFoodLogs       = Self.load([FoodLog].self,         key: Keys.foodLogs)       ?? []
         self.allBodyweightLogs = Self.load([BodyweightLog].self,   key: Keys.bodyweightLogs) ?? []
+
+        // Load planning data (default to empty).
+        self.dailyNotes     = Self.load([String: String].self, key: Keys.dailyNotes)   ?? [:]
+        self.allGroceryItems = Self.load([GroceryItem].self,   key: Keys.groceryItems) ?? []
     }
 
     // MARK: - Activation
@@ -175,6 +187,48 @@ final class GuestDataStore {
         persist(allBodyweightLogs, key: Keys.bodyweightLogs)
     }
 
+    // MARK: - Daily note mutations
+
+    /// Returns the stored note for `date` (a "yyyy-MM-dd" string), or `nil` if none.
+    func dailyNote(for date: String) -> String? {
+        dailyNotes[date]
+    }
+
+    /// Saves or removes the note for `date`. An empty string removes the entry.
+    func saveDailyNote(_ content: String, for date: String) {
+        if content.isEmpty {
+            dailyNotes.removeValue(forKey: date)
+        } else {
+            dailyNotes[date] = content
+        }
+        persist(dailyNotes, key: Keys.dailyNotes)
+    }
+
+    // MARK: - Grocery item mutations
+
+    func appendGroceryItem(_ item: GroceryItem) {
+        allGroceryItems.append(item)
+        persist(allGroceryItems, key: Keys.groceryItems)
+    }
+
+    /// Replaces the stored item with the same `id`. No-op if not found.
+    func updateGroceryItem(_ item: GroceryItem) {
+        guard let idx = allGroceryItems.firstIndex(where: { $0.id == item.id }) else { return }
+        allGroceryItems[idx] = item
+        persist(allGroceryItems, key: Keys.groceryItems)
+    }
+
+    func deleteGroceryItem(id: UUID) {
+        allGroceryItems.removeAll { $0.id == id }
+        persist(allGroceryItems, key: Keys.groceryItems)
+    }
+
+    /// Removes all grocery items whose `isChecked` is `true`.
+    func clearCheckedGroceryItems() {
+        allGroceryItems.removeAll(where: \.isChecked)
+        persist(allGroceryItems, key: Keys.groceryItems)
+    }
+
     // MARK: - Clear all guest data
 
     /// Destroys all persisted guest data and deactivates guest mode.
@@ -189,9 +243,12 @@ final class GuestDataStore {
         profile           = nil
         allFoodLogs       = []
         allBodyweightLogs = []
+        dailyNotes        = [:]
+        allGroceryItems   = []
 
         for key in [Keys.isActive, Keys.goal, Keys.profile,
-                    Keys.foodLogs, Keys.bodyweightLogs, Keys.guestId] {
+                    Keys.foodLogs, Keys.bodyweightLogs, Keys.guestId,
+                    Keys.dailyNotes, Keys.groceryItems] {
             defaults.removeObject(forKey: key)
         }
     }
