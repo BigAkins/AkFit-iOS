@@ -58,7 +58,15 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
 
         do {
             let products = try await fetchSearch(query: q)
-            return products.compactMap(Self.toFoodItem).prefix(20).map { $0 }
+            // Sort so products with an explicit English name are processed first.
+            // This means the 20-item prefix cap favours English-language results
+            // even when OFF returns a mixed-language set.
+            let sorted = products.sorted { a, b in
+                let aHasEn = a.productNameEn.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
+                let bHasEn = b.productNameEn.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
+                return aHasEn && !bHasEn
+            }
+            return sorted.compactMap(Self.toFoodItem).prefix(20).map { $0 }
         } catch {
             return []
         }
@@ -121,8 +129,9 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
     // MARK: - Normalization
 
     /// Maps an OFF product record to the app's `FoodItem` model.
-    /// Returns `nil` when the product name is missing or nutritional data
-    /// is clearly invalid (e.g. calories > 5 000 per serving — data entry error).
+    /// Returns `nil` when the product name is missing, nutritional data
+    /// is clearly invalid (e.g. calories > 5 000 per serving), or the product
+    /// name is primarily in a non-Latin script (Cyrillic, Arabic, CJK, etc.).
     ///
     /// **Serving strategy:**
     /// 1. If `serving_quantity` is present and > 0, use `_serving` nutriment values.
@@ -133,7 +142,7 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
     /// When calorie data is entirely absent, estimates via Atwater factors
     /// (protein × 4 + carbs × 4 + fat × 9).
     private static func toFoodItem(_ product: OFFProduct) -> FoodItem? {
-        // Require a non-empty name — prefer the English variant when available.
+        // Require a non-empty name — prefer the explicit English variant when available.
         let name: String
         if let en = product.productNameEn,
            !en.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -144,6 +153,11 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
         } else {
             return nil
         }
+
+        // Reject products whose names are primarily non-Latin script (e.g. Cyrillic,
+        // Arabic, CJK, Japanese). Keeps U.S.-relevant results without blocking
+        // accented Western-language names (French, Spanish, German, etc.).
+        guard Self.isLatinScript(name) else { return nil }
 
         let n          = product.nutriments
         let useServing = (product.servingQuantity ?? 0) > 0
@@ -217,6 +231,20 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
             carbsG:          carbs,
             fatG:            fat
         )
+    }
+
+    // MARK: - Helpers
+
+    /// Returns `true` when at least 50 % of `string`'s Unicode scalars fall within
+    /// the Latin script blocks (Basic Latin 0000–007F, Latin-1 Supplement 0080–00FF,
+    /// Latin Extended-A/B 0100–024F).  Covers English, French, Spanish, German,
+    /// Italian, and other Western-alphabet languages while rejecting names primarily
+    /// in Cyrillic, Arabic, CJK, Japanese, Korean, or other non-Latin scripts.
+    private static func isLatinScript(_ string: String) -> Bool {
+        let scalars = string.unicodeScalars
+        guard !scalars.isEmpty else { return false }
+        let latinCount = scalars.filter { $0.value <= 0x024F }.count
+        return Double(latinCount) / Double(scalars.count) >= 0.5
     }
 }
 

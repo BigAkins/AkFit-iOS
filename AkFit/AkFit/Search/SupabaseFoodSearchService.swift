@@ -23,10 +23,38 @@ struct SupabaseFoodSearchService: FoodSearchService {
                 .limit(30)
                 .execute()
                 .value
-            return rows.map(FoodItem.init)
+            // Re-rank client-side by match quality so exact/prefix matches surface
+            // before weaker substring hits.  E.g. searching "bacon" shows
+            // "Bacon, cooked" (prefix → rank 1) before "Turkey Bacon" (word-prefix → rank 3).
+            let ql = q.lowercased()
+            return rows.map(FoodItem.init).sorted { a, b in
+                let sa = Self.matchScore(name: a.name, query: ql)
+                let sb = Self.matchScore(name: b.name, query: ql)
+                if sa != sb { return sa < sb }
+                // Within the same rank, shorter names are simpler/more generic.
+                return a.name.count < b.name.count
+            }
         } catch {
             return []
         }
+    }
+
+    /// Scores how closely `name` matches `query` (both should be lowercased).
+    /// Lower = better match.
+    ///
+    /// 0 – exact match          ("egg" → "egg")
+    /// 1 – name starts with     ("bacon" → "Bacon, cooked")
+    /// 2 – first word exact     ("egg" → "Egg, whole")
+    /// 3 – any word starts with ("bacon" → "Turkey Bacon")
+    /// 4 – substring only       ("rice" → "White Rice, cooked")
+    private static func matchScore(name: String, query q: String) -> Int {
+        let n = name.lowercased()
+        if n == q                                                     { return 0 }
+        if n.hasPrefix(q)                                             { return 1 }
+        let words = n.split(separator: " ").map(String.init)
+        if words.first == q                                           { return 2 }
+        if words.contains(where: { $0.hasPrefix(q) })                { return 3 }
+        return 4
     }
 
     /// Returns a small, curated set of foods for the empty-state "Suggestions"
