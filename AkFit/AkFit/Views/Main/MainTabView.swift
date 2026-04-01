@@ -2,23 +2,68 @@ import SwiftUI
 
 /// Root tab container. Tab selection is driven by `AppRouter` so any child
 /// view can navigate programmatically — e.g. the dashboard FAB jumps to Search.
+///
+/// A center scan button floats over the tab bar between the Search and Progress
+/// items. Tapping it presents `BarcodeScannerView` as a full-screen cover.
+/// When the scanner resolves a barcode, the app switches to the Search tab and
+/// pushes `FoodDetailView` via `AppRouter.pendingScannedItem`.
 struct MainTabView: View {
     @Environment(AppRouter.self) private var router
+    /// Drives the full-screen scanner cover presented from the center nav button.
+    @State private var showScanner = false
+    /// Staging area: holds the scanned food until the scanner cover fully dismisses,
+    /// then routes it through `AppRouter` to `SearchView`'s navigation stack.
+    @State private var pendingScannedFood: FoodItem? = nil
 
     var body: some View {
         @Bindable var router = router
-        TabView(selection: $router.selectedTab) {
-            Tab("Dashboard", systemImage: "chart.bar.fill", value: AppTab.dashboard) {
-                DashboardView()
+        ZStack(alignment: .bottom) {
+            TabView(selection: $router.selectedTab) {
+                Tab("Dashboard", systemImage: "chart.bar.fill", value: AppTab.dashboard) {
+                    DashboardView()
+                }
+                Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
+                    SearchView()
+                }
+                Tab("Progress", systemImage: "chart.line.uptrend.xyaxis", value: AppTab.progress) {
+                    ProgressTabView()
+                }
+                Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
+                    SettingsView()
+                }
             }
-            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search) {
-                SearchView()
+
+            // Center scan action — sits in the middle of the tab bar.
+            // Tapping this is equivalent to tapping the barcode icon in the Search
+            // toolbar, but reachable from any tab without switching first.
+            Button {
+                showScanner = true
+            } label: {
+                Image(systemName: "barcode.viewfinder")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(Color.primary)
+                    .clipShape(Circle())
+                    .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
             }
-            Tab("Progress", systemImage: "chart.line.uptrend.xyaxis", value: AppTab.progress) {
-                ProgressTabView()
+            .frame(maxWidth: .infinity)
+            .padding(.bottom, 20)
+            .accessibilityLabel("Scan barcode")
+        }
+        .fullScreenCover(isPresented: $showScanner, onDismiss: {
+            // The scanner dismisses itself after calling onFound. Promote the
+            // staged food to AppRouter so SearchView's navigation stack picks it up.
+            if let food = pendingScannedFood {
+                pendingScannedFood = nil
+                router.pendingScannedItem = food
+                router.selectedTab = .search
             }
-            Tab("Settings", systemImage: "gearshape", value: AppTab.settings) {
-                SettingsView()
+        }) {
+            BarcodeScannerView { food in
+                // Stage the food — the scanner will call dismiss() after this,
+                // triggering onDismiss above once the cover animation completes.
+                pendingScannedFood = food
             }
         }
     }

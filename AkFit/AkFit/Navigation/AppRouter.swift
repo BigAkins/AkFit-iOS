@@ -22,4 +22,8 @@ enum AppTab: Hashable {
 @Observable
 final class AppRouter {
     var selectedTab: AppTab = .dashboard
+    /// Set when a barcode scan from the center nav action resolves to a food item.
+    /// `SearchView` watches this and promotes it to a local `scannedFood` navigation
+    /// destination once the tab switch animation completes.
+    var pendingScannedItem: FoodItem? = nil
 }

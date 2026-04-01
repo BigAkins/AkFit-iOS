@@ -126,6 +126,13 @@ struct SearchView: View {
                 }
                 suggestions = await fetchedSuggestions
             }
+            // Receives food items resolved by the center nav scan button (in MainTabView).
+            // The cover has already dismissed before this fires, so we can push directly.
+            .onChange(of: router.pendingScannedItem) { _, newItem in
+                guard let item = newItem else { return }
+                router.pendingScannedItem = nil
+                scannedFood = item
+            }
         }
     }
 
