@@ -285,6 +285,47 @@ final class AuthManager {
         try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
     }
 
+    // MARK: - Account deletion (authenticated path)
+
+    /// Permanently deletes the authenticated user's account and all associated
+    /// data by calling the `delete-account` Supabase Edge Function.
+    ///
+    /// The Edge Function uses the service-role key to call
+    /// `auth.admin.deleteUser`, which removes the user from `auth.users` and
+    /// cascades the deletion to every user-owned table via ON DELETE CASCADE
+    /// (food_logs, bodyweight_logs, user_goals/goals, profiles, favorite_foods,
+    /// daily_notes, grocery_items).
+    ///
+    /// The Supabase client automatically attaches the current access token to
+    /// the Authorization header — the service-role key never touches this app.
+    ///
+    /// After a successful deletion `auth.signOut()` is called locally. The
+    /// `authStateChanges` stream fires `.signedOut`, `userState` becomes
+    /// `.signedOut`, and `RootView` routes to `AuthView` automatically.
+    ///
+    /// **Sign in with Apple:** the Apple token becomes orphaned after deletion
+    /// (any credential check returns `.notFound`). Full cryptographic revocation
+    /// via Apple's `/auth/revoke` endpoint requires the Apple private key on the
+    /// server — that infrastructure is not yet in place. The account and all
+    /// data are permanently removed here.
+    func deleteAccount() async throws {
+        guard session != nil else {
+            throw DeleteAccountError.notAuthenticated
+        }
+        do {
+            // The Supabase client attaches the active session token automatically.
+            // The @discardableResult Data response is not needed here.
+            try await SupabaseClientProvider.shared.functions
+                .invoke("delete-account")
+        } catch {
+            throw DeleteAccountError.serverError
+        }
+        // Sign out locally. The JWT is now invalid (user deleted on server),
+        // so signOut may return an error — ignore it. The authStateChanges
+        // stream will fire .signedOut and RootView re-routes automatically.
+        try? await SupabaseClientProvider.shared.auth.signOut()
+    }
+
     func signInWithApple(idToken: String, rawNonce: String) async throws {
         try await SupabaseClientProvider.shared.auth.signInWithIdToken(
             credentials: OpenIDConnectCredentials(
@@ -332,6 +373,27 @@ final class AuthManager {
             guestStore.saveProfile(profile)
         } else {
             _serverProfile = profile
+        }
+    }
+}
+
+// MARK: - Account deletion error
+
+/// Describes why `AuthManager.deleteAccount()` failed.
+/// Conforms to `LocalizedError` so `error.localizedDescription` is
+/// user-facing and can be displayed directly in `SettingsView`.
+enum DeleteAccountError: LocalizedError {
+    /// No active Supabase session — the user must sign in again.
+    case notAuthenticated
+    /// The Edge Function returned an error or the network request failed.
+    case serverError
+
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            return "No active session. Please sign in again before deleting your account."
+        case .serverError:
+            return "Account deletion failed. Please check your connection and try again."
         }
     }
 }

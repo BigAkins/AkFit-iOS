@@ -3,8 +3,7 @@ import SwiftUI
 /// Settings screen.
 ///
 /// Surfaces account identity, current daily targets, an entry point into
-/// `EditGoalView`, and sign-out. Intentionally scoped — does not include
-/// notification preferences, billing, or account deletion in MVP.
+/// `EditGoalView`, sign-out, and account deletion (App Store requirement).
 ///
 /// **Data sources:**
 /// - `authManager.currentUserEmail` — account identifier
@@ -19,12 +18,15 @@ struct SettingsView: View {
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
 
-    @State private var showEditGoal          = false
-    @State private var showEditProfile       = false
-    @State private var isSigningOut          = false
-    @State private var signOutError: String? = nil
-    @State private var showSignOutConfirm    = false
-    @State private var showExitGuestConfirm  = false
+    @State private var showEditGoal               = false
+    @State private var showEditProfile            = false
+    @State private var isSigningOut               = false
+    @State private var signOutError: String?      = nil
+    @State private var showSignOutConfirm         = false
+    @State private var showExitGuestConfirm       = false
+    @State private var showDeleteAccountConfirm   = false
+    @State private var isDeletingAccount          = false
+    @State private var deleteAccountError: String? = nil
 
     // MARK: - Body
 
@@ -86,6 +88,17 @@ struct SettingsView: View {
                 Button("Cancel", role: .cancel) { }
             } message: {
                 Text("All your local data — food logs, weight entries, and goals — will be permanently deleted. This cannot be undone.")
+            }
+            // Delete Account confirmation dialog — shown before the irreversible server-side deletion.
+            .confirmationDialog(
+                "Delete Account",
+                isPresented: $showDeleteAccountConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("Delete My Account", role: .destructive) { deleteAccount() }
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                Text("This will permanently delete your account and all associated data — food logs, weight history, targets, and notes. This cannot be undone.")
             }
         }
     }
@@ -402,7 +415,7 @@ struct SettingsView: View {
                 }
             }
         } else {
-            // Authenticated users sign out.
+            // Authenticated users: sign out.
             Section {
                 // Button sets the confirmation flag — dialog fires before any sign-out
                 // logic runs, preventing accidental account sign-outs.
@@ -416,13 +429,37 @@ struct SettingsView: View {
                         if isSigningOut { ProgressView() }
                     }
                 }
-                .disabled(isSigningOut)
+                .disabled(isSigningOut || isDeletingAccount)
 
                 if let err = signOutError {
                     Text(err)
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
+            }
+
+            // Authenticated users: account deletion (App Store Guideline 5.1.1).
+            Section {
+                Button {
+                    showDeleteAccountConfirm = true
+                } label: {
+                    HStack {
+                        Text("Delete Account")
+                            .foregroundStyle(.red)
+                        Spacer()
+                        if isDeletingAccount { ProgressView() }
+                    }
+                }
+                .disabled(isDeletingAccount || isSigningOut)
+
+                if let err = deleteAccountError {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                }
+            } footer: {
+                Text("Permanently deletes your account and all associated data.")
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -485,6 +522,21 @@ struct SettingsView: View {
                 // AuthManager clears session → RootView re-routes to AuthView.
             } catch {
                 signOutError = error.localizedDescription
+            }
+        }
+    }
+
+    private func deleteAccount() {
+        isDeletingAccount = true
+        deleteAccountError = nil
+        Task {
+            defer { isDeletingAccount = false }
+            do {
+                try await authManager.deleteAccount()
+                // AuthManager signs out locally → authStateChanges fires .signedOut
+                // → RootView re-routes to AuthView automatically.
+            } catch {
+                deleteAccountError = error.localizedDescription
             }
         }
     }
