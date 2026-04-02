@@ -4,6 +4,7 @@ import SwiftUI
 
 struct AuthView: View {
     @Environment(AuthManager.self) private var authManager
+    @Environment(\.colorScheme) private var colorScheme
 
     @State private var mode: Mode = .signIn
     @State private var email: String = ""
@@ -167,6 +168,7 @@ struct AuthView: View {
                 } onCompletion: { result in
                     handleAppleSignInResult(result)
                 }
+                .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
                 .frame(height: 52)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
                 .disabled(isSubmitting)
@@ -201,6 +203,8 @@ struct AuthView: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 48)
         }
+        .frame(maxWidth: 500)
+        .frame(maxWidth: .infinity)
         .background(Color(UIColor.systemBackground))
         // Password-reset confirmation / error alert.
         .alert(
@@ -249,6 +253,8 @@ struct AuthView: View {
             .padding(.bottom, 48)
         }
         .padding(.horizontal, 32)
+        .frame(maxWidth: 500)
+        .frame(maxWidth: .infinity)
         .background(Color(UIColor.systemBackground))
     }
 
