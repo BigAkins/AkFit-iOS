@@ -43,7 +43,7 @@ struct MainTabView: View {
                     .font(.system(size: 22, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: 52, height: 52)
-                    .background(Color.primary)
+                    .background(Color.black)
                     .clipShape(Circle())
                     .shadow(color: .black.opacity(0.15), radius: 6, x: 0, y: 2)
             }
