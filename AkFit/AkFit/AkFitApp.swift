@@ -74,30 +74,36 @@ private struct RootView: View {
     @Environment(AuthManager.self) private var authManager
 
     var body: some View {
-        Group {
-            if authManager.isLoading {
-                // Branded loading screen — visible only while the auth
-                // observer resolves the initial session (typically < 1s).
-                VStack {
-                    Spacer()
-                    Image("akfit_logo")
-                        .resizable()
-                        .renderingMode(.original)
-                        .scaledToFit()
-                        .frame(height: 120)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(UIColor.systemBackground))
+        ZStack {
+            // Persistent background — renders on the very first SwiftUI frame,
+            // before the conditional branch below evaluates.  This eliminates
+            // the brief white flash between the native launch screen and the
+            // branded loading screen.
+            Color(UIColor.systemBackground)
                 .ignoresSafeArea()
-            } else if authManager.userState == .signedOut {
-                AuthView()
-            } else if authManager.userState == .authenticated && authManager.dataFetchFailed {
-                DataFetchErrorView()
-            } else if !authManager.isOnboarded {
-                OnboardingView()
-            } else {
-                MainTabView()
+
+            Group {
+                if authManager.isLoading {
+                    // Branded loading screen — visible only while the auth
+                    // observer resolves the initial session (typically < 1s).
+                    VStack {
+                        Spacer()
+                        Image("akfit_logo")
+                            .resizable()
+                            .renderingMode(.original)
+                            .scaledToFit()
+                            .frame(height: 120)
+                        Spacer()
+                    }
+                } else if authManager.userState == .signedOut {
+                    AuthView()
+                } else if authManager.userState == .authenticated && authManager.dataFetchFailed {
+                    DataFetchErrorView()
+                } else if !authManager.isOnboarded {
+                    OnboardingView()
+                } else {
+                    MainTabView()
+                }
             }
         }
         .animation(.easeInOut(duration: 0.25), value: authManager.isLoading)

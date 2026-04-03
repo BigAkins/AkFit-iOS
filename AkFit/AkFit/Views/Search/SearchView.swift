@@ -95,15 +95,6 @@ struct SearchView: View {
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search food..."
             )
-            .searchSuggestions {
-                let q = query.trimmingCharacters(in: .whitespaces)
-                if !q.isEmpty {
-                    ForEach(matchingSuggestions(for: q), id: \.self) { term in
-                        Label(term, systemImage: "magnifyingglass")
-                            .searchCompletion(term)
-                    }
-                }
-            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -303,16 +294,40 @@ struct SearchView: View {
     }
 
     /// Shown while a debounce delay or network request is in progress and
-    /// there are no stale results to display.
+    /// there are no stale results to display. Shows matching type-ahead
+    /// suggestions above the loading indicator — tapping one fills the
+    /// search field and triggers a new search.
     private var loadingView: some View {
-        VStack(spacing: 10) {
-            Spacer()
-            ProgressView()
-            Text("Searching…")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-            Spacer()
+        List {
+            summarySection
+            let q = query.trimmingCharacters(in: .whitespaces)
+            let matches = matchingSuggestions(for: q)
+            if !matches.isEmpty {
+                Section("Suggestions") {
+                    ForEach(matches, id: \.self) { term in
+                        Button {
+                            query = term
+                        } label: {
+                            Label(term, systemImage: "magnifyingglass")
+                        }
+                        .foregroundStyle(.primary)
+                    }
+                }
+            }
+            Section {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Searching…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
+                .listRowSeparator(.hidden)
+            }
         }
+        .listStyle(.insetGrouped)
     }
 
     private var noResultsView: some View {
