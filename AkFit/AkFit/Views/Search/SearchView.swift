@@ -53,6 +53,21 @@ struct SearchView: View {
     /// Food names and brand names from the database, used as the type-ahead
     /// suggestion pool. Fetched once on first appear. Guaranteed searchable.
     @State private var typeAheadTerms: [String] = []
+    /// Stable snapshot of matching suggestions for the current query.
+    /// Updated explicitly in `.onChange(of: query)` so the panel never reads
+    /// a mid-transition or recomputed value during rendering.
+    @State private var displayedSuggestions: [String] = []
+    /// Explicitly managed show/hide state for the suggestion overlay.
+    /// Mutated ONLY inside `withAnimation` blocks so the animation is scoped
+    /// to the opacity/offset transition and never bleeds into child text content.
+    @State private var showSuggestionPanel = false
+    /// Set `true` right before a programmatic `query` change (suggestion tap)
+    /// so `onChange(of: query)` knows to skip its suggestion-refresh logic.
+    @State private var hasCommitted = false
+    /// Set `true` when the user explicitly commits a search (tap suggestion or
+    /// keyboard Search). Reset to `false` on every manual keystroke. Controls
+    /// whether the "No results" message shows (only after a real search attempt).
+    @State private var hasSearchedCurrentQuery = false
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -65,29 +80,27 @@ struct SearchView: View {
                 if q.isEmpty {
                     promptView
                 } else if !results.isEmpty {
-                    // Stale results stay visible while a new debounced search is in flight.
                     resultsList
                 } else if isSearching {
                     loadingView
-                } else if shouldShowSuggestions {
-                    // Suggestion panel overlays an empty area — avoids
-                    // showing "No results" and suggestions simultaneously.
+                } else if !hasSearchedCurrentQuery {
+                    // User is still typing — suggestion panel floats over this.
+                    // Don't show "No results" until a search has actually been committed.
                     Color.clear
                 } else {
                     noResultsView
                 }
             }
             .overlay(alignment: .top) {
-                Group {
-                    if shouldShowSuggestions {
-                        suggestionPanelView
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .offset(y: -8)),
-                                removal: .opacity
-                            ))
-                    }
-                }
-                .animation(.easeOut(duration: 0.15), value: shouldShowSuggestions)
+                // Always in the view tree so text is pre-measured at opacity 0.
+                // NO .animation() modifier here — animation is scoped to
+                // `withAnimation` at the state-change sites so it never bleeds
+                // into ForEach child content (which caused the blank-text glitch).
+                suggestionPanelView
+                    .opacity(showSuggestionPanel ? 1 : 0)
+                    .offset(y: showSuggestionPanel ? 0 : -8)
+                    .allowsHitTesting(showSuggestionPanel)
+                    .accessibilityHidden(!showSuggestionPanel)
             }
             .navigationTitle("Search")
             .searchable(
@@ -95,6 +108,9 @@ struct SearchView: View {
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search food..."
             )
+            .onSubmit(of: .search) {
+                commitSearch()
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -118,7 +134,40 @@ struct SearchView: View {
                     pendingScannedFood = food
                 }
             }
-            .onChange(of: query) { performSearch() }
+            .onChange(of: query) {
+                // If a search was just committed (suggestion tap), the query
+                // change is programmatic — skip suggestion logic entirely.
+                if hasCommitted {
+                    hasCommitted = false
+                    return
+                }
+                let q = query.trimmingCharacters(in: .whitespaces)
+                // User is typing — clear stale results and cancel any in-flight search.
+                // This keeps the suggestion panel as the sole UI while typing.
+                results = []
+                isSearching = false
+                hasSearchedCurrentQuery = false
+                searchTask?.cancel()
+                // Update suggestions (content OUTSIDE withAnimation to avoid text crossfade).
+                displayedSuggestions = matchingSuggestions(for: q)
+                let wantPanel = !q.isEmpty && !displayedSuggestions.isEmpty
+                if wantPanel != showSuggestionPanel {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showSuggestionPanel = wantPanel
+                    }
+                }
+            }
+            .onChange(of: typeAheadTerms) {
+                let q = query.trimmingCharacters(in: .whitespaces)
+                guard !q.isEmpty, !hasCommitted else { return }
+                displayedSuggestions = matchingSuggestions(for: q)
+                let wantPanel = !displayedSuggestions.isEmpty && !hasSearchedCurrentQuery
+                if wantPanel != showSuggestionPanel {
+                    withAnimation(.easeOut(duration: 0.15)) {
+                        showSuggestionPanel = wantPanel
+                    }
+                }
+            }
             .onChange(of: logStore.lastLoggedEntry?.id) { _, newId in
                 guard newId != nil else { return }
                 let captured = logStore.lastLoggedEntry
@@ -481,31 +530,27 @@ struct SearchView: View {
 
     // MARK: - Type-ahead suggestions
 
-    /// `true` when the floating suggestion panel should be visible: the user
-    /// has typed something, no results are showing yet, and at least one
-    /// suggestion matches the current query.
-    private var shouldShowSuggestions: Bool {
-        let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty, results.isEmpty else { return false }
-        return !matchingSuggestions(for: q).isEmpty
-    }
-
     /// Floating panel of type-ahead suggestions. Positioned via `.overlay`
     /// at the top of the content area, just below the search bar. Uses a
     /// material background and shadow for a pop-up feel without relying on
     /// the buggy system `.searchSuggestions` overlay.
+    ///
+    /// Reads from `displayedSuggestions` (a stable `@State` snapshot) rather
+    /// than recomputing matches, so the ForEach content never shifts during
+    /// the show/hide animation.
     private var suggestionPanelView: some View {
-        let matches = matchingSuggestions(for: query.trimmingCharacters(in: .whitespaces))
-        return VStack(alignment: .leading, spacing: 0) {
-            ForEach(matches.indices, id: \.self) { i in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(displayedSuggestions.indices, id: \.self) { i in
                 Button {
-                    query = matches[i]
+                    hasCommitted = true
+                    query = displayedSuggestions[i]
+                    commitSearch()
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "magnifyingglass")
                             .font(.subheadline)
                             .foregroundStyle(.tertiary)
-                        Text(matches[i])
+                        Text(displayedSuggestions[i])
                             .font(.body)
                             .foregroundStyle(.primary)
                         Spacer()
@@ -515,7 +560,7 @@ struct SearchView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                if i < matches.count - 1 {
+                if i < displayedSuggestions.count - 1 {
                     Divider().padding(.leading, 42)
                 }
             }
@@ -560,20 +605,20 @@ struct SearchView: View {
 
     // MARK: - Search logic
 
-    private func performSearch() {
+    /// Commits a search for the current query. Called only on explicit user
+    /// intent: tapping a suggestion or pressing the keyboard Search button.
+    /// No debounce — the user has already finished typing.
+    private func commitSearch() {
         searchTask?.cancel()
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else {
-            results = []
-            isSearching = false
-            return
+        guard !q.isEmpty else { return }
+        // Hide suggestions immediately — results are taking over.
+        withAnimation(.easeOut(duration: 0.15)) {
+            showSuggestionPanel = false
         }
+        hasSearchedCurrentQuery = true
         isSearching = true
         searchTask = Task {
-            // 250 ms debounce — rapid keystrokes cancel this sleep and restart,
-            // so the network hop only fires once the user pauses.
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
             let found = await searchService.search(query: q)
             guard !Task.isCancelled else { return }
             results = found
