@@ -82,10 +82,9 @@ private struct RootView: View {
                     Spacer()
                     Image("akfit_logo")
                         .resizable()
-                        .renderingMode(.template)
+                        .renderingMode(.original)
                         .scaledToFit()
-                        .frame(height: 72)
-                        .foregroundStyle(.primary)
+                        .frame(height: 120)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
