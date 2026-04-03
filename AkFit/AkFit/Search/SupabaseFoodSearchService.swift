@@ -118,6 +118,37 @@ struct SupabaseFoodSearchService: FoodSearchService {
             return []
         }
     }
+
+    /// Returns distinct food names and brand names from `generic_foods` for
+    /// the type-ahead suggestion pool. Every returned term is guaranteed to
+    /// be resolvable by `search(query:)` since it comes from the same table.
+    func fetchTypeAheadTerms() async -> [String] {
+        do {
+            struct TermRow: Decodable {
+                let foodName: String
+                let brand: String?
+                enum CodingKeys: String, CodingKey {
+                    case foodName = "food_name"
+                    case brand
+                }
+            }
+            let rows: [TermRow] = try await SupabaseClientProvider.shared
+                .from("generic_foods")
+                .select("food_name, brand")
+                .order("food_name")
+                .limit(500)
+                .execute()
+                .value
+            var terms = Set<String>()
+            for row in rows {
+                terms.insert(row.foodName)
+                if let brand = row.brand { terms.insert(brand) }
+            }
+            return terms.sorted()
+        } catch {
+            return []
+        }
+    }
 }
 
 // MARK: - Row model

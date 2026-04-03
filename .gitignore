@@ -33,6 +33,8 @@ Secrets.xcconfig
 Config.local.xcconfig
 *.secret
 *.secrets
+CLAUDE.md
+.claude/
 
 # Local app config overrides
 LocalConfig.swift

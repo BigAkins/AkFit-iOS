@@ -50,29 +50,13 @@ struct SearchView: View {
     /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
     /// Set `true` before the insert call; cleared after it completes.
     @State private var isQuickLogging = false
+    /// Food names and brand names from the database, used as the type-ahead
+    /// suggestion pool. Fetched once on first appear. Guaranteed searchable.
+    @State private var typeAheadTerms: [String] = []
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
     private let suggestionService = SupabaseFoodSearchService()
-
-    /// Popular search terms for type-ahead suggestions. Covers the chain brands
-    /// and generic foods in our curated database so users can discover them
-    /// without guessing exact names.
-    private static let popularTerms: [String] = [
-        "Chicken Breast", "Chicken Thigh", "Ground Beef", "Ground Turkey",
-        "Salmon", "Tuna", "Shrimp", "Tilapia",
-        "Egg", "Greek Yogurt", "Cottage Cheese", "Protein",
-        "Rice", "Oats", "Pasta", "Bread", "Potato", "Sweet Potato",
-        "Banana", "Apple", "Avocado", "Broccoli",
-        "Peanut Butter", "Almonds", "Bacon", "Turkey Bacon",
-        "McDonald's", "Chick-fil-A", "Chipotle", "Taco Bell",
-        "Wendy's", "Subway", "Panera", "Starbucks",
-        "In-N-Out", "Popeyes", "Raising Cane's", "Whataburger",
-        "CAVA", "QDOBA", "MOD Pizza",
-        "Quest Bar", "Clif Bar", "Cheetos", "Doritos",
-        "Trader Joe's", "Great Value",
-        "Jollof Rice", "Pounded Yam", "Suya", "Egusi Soup",
-    ]
 
     var body: some View {
         NavigationStack {
@@ -85,6 +69,10 @@ struct SearchView: View {
                     resultsList
                 } else if isSearching {
                     loadingView
+                } else if shouldShowSuggestions {
+                    // Suggestion panel overlays an empty area — avoids
+                    // showing "No results" and suggestions simultaneously.
+                    Color.clear
                 } else {
                     noResultsView
                 }
@@ -154,8 +142,9 @@ struct SearchView: View {
                 }
             }
             .task {
-                // Fetch suggestions, recents, favorites, and grocery items concurrently.
+                // Fetch suggestions, type-ahead terms, recents, favorites, and grocery items concurrently.
                 async let fetchedSuggestions = suggestionService.fetchSuggestions()
+                async let fetchedTerms = suggestionService.fetchTypeAheadTerms()
                 if let userId = authManager.currentUserId {
                     async let recents: Void = logStore.refreshRecents(userId: userId)
                     async let favs: Void    = favStore.refresh(userId: userId)
@@ -163,6 +152,7 @@ struct SearchView: View {
                     _ = await (recents, favs, grocery)
                 }
                 suggestions = await fetchedSuggestions
+                typeAheadTerms = await fetchedTerms
             }
             // Receives food items resolved by the center nav scan button (in MainTabView).
             // The cover has already dismissed before this fires, so we can push directly.
@@ -536,11 +526,11 @@ struct SearchView: View {
         .padding(.top, 4)
     }
 
-    /// Builds a pool of suggestion terms from popular searches, recent logs,
-    /// and favorites. Deduplicated via `Set` to avoid repeated entries.
+    /// Builds a pool of suggestion terms from database food names/brands,
+    /// recent logs, and favorites. Every term is guaranteed searchable.
     private var suggestionPool: [String] {
         var pool = Set<String>()
-        for term in Self.popularTerms { pool.insert(term) }
+        for term in typeAheadTerms { pool.insert(term) }
         for log  in logStore.recentFoods { pool.insert(log.foodName) }
         for fav  in favStore.favorites   { pool.insert(fav.foodName) }
         return pool.sorted()
