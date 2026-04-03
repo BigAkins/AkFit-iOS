@@ -127,6 +127,14 @@ struct ProgressTabView: View {
                 .padding(.bottom, 32)
             }
             .navigationTitle("Progress")
+            .refreshable {
+                if let userId = authManager.currentUserId {
+                    let days = selectedRange.rawValue
+                    async let calories: Void = logStore.refreshWeek(userId: userId, days: days)
+                    async let weights:  Void = weightStore.refreshWeek(userId: userId, days: days)
+                    _ = await (calories, weights)
+                }
+            }
             .sheet(isPresented: $showWeightLog) {
                 WeightLogSheet(initialLbs: logSheetInitialLbs)
                     .presentationDetents([.medium])
@@ -473,15 +481,28 @@ struct ProgressTabView: View {
         .clipShape(RoundedRectangle(cornerRadius: 16))
     }
 
+    // MARK: - Cached formatters
+
+    /// Static formatters avoid allocating a new `DateFormatter` on every render
+    /// pass — particularly important for the chart axis which calls `xAxisLabel`
+    /// once per tick mark (up to 90 times in the 90-day view).
+    private static let dayLabelFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "EEEE, MMM d"; return f
+    }()
+    private static let monthAxisFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM d"; return f
+    }()
+    private static let quarterAxisFmt: DateFormatter = {
+        let f = DateFormatter(); f.dateFormat = "MMM"; return f
+    }()
+
     // MARK: - Helpers
 
     private func dayLabel(for date: Date) -> String {
         let cal = Calendar.current
         if cal.isDateInToday(date)     { return "Today" }
         if cal.isDateInYesterday(date) { return "Yesterday" }
-        let fmt = DateFormatter()
-        fmt.dateFormat = "EEEE, MMM d"
-        return fmt.string(from: date)
+        return Self.dayLabelFmt.string(from: date)
     }
 
     // MARK: - X-axis helpers
@@ -512,13 +533,9 @@ struct ProgressTabView: View {
                 ? "Today"
                 : date.formatted(.dateTime.weekday(.abbreviated))
         case .month:
-            let fmt = DateFormatter()
-            fmt.dateFormat = "MMM d"
-            return fmt.string(from: date)
+            return Self.monthAxisFmt.string(from: date)
         case .quarter:
-            let fmt = DateFormatter()
-            fmt.dateFormat = "MMM"
-            return fmt.string(from: date)
+            return Self.quarterAxisFmt.string(from: date)
         }
     }
 }

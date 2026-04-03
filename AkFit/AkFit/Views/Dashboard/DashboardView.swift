@@ -201,6 +201,13 @@ struct DashboardView: View {
                 .navigationTitle("Today")
                 // Bottom inset keeps the last row visible above the tab bar + FAB.
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 80) }
+                .refreshable {
+                    if let userId = authManager.currentUserId {
+                        async let logs: Void = logStore.refreshToday(userId: userId)
+                        async let note: Void = noteStore.fetchToday(userId: userId)
+                        _ = await (logs, note)
+                    }
+                }
                 .task {
                     if let userId = authManager.currentUserId {
                         // Fetch today's food log and note concurrently.
@@ -259,7 +266,7 @@ struct DashboardView: View {
         if let birthdate = authManager.profile?.birthdate,
            isBirthday(birthdate: birthdate, on: date) {
             guard let name, !name.isEmpty else { return "Happy birthday!" }
-            return "Happy birthday, \(name)"
+            return "Happy birthday, \(name)!"
         }
 
         let hour = Calendar.current.component(.hour, from: date)
@@ -570,6 +577,8 @@ private struct FoodLogRow: View {
 
     private var servingText: String {
         let qty = log.quantity
+        // When quantity is exactly 1, just show the serving label — "1 ×" adds nothing.
+        if qty == 1.0 { return log.servingLabel }
         let qtyStr: String
         if qty == qty.rounded() {
             qtyStr = "\(Int(qty))"
@@ -621,10 +630,12 @@ private struct NoteEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var text: String = ""
+    @FocusState private var isEditorFocused: Bool
 
     var body: some View {
         NavigationStack {
             TextEditor(text: $text)
+                .focused($isEditorFocused)
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
                 .navigationTitle("Today's Note")
@@ -646,9 +657,13 @@ private struct NoteEditorSheet: View {
                 }
         }
         .onAppear {
-            // Initialise text from the store's current content so the editor
-            // starts pre-filled rather than blank.
             text = noteStore.todayContent
+        }
+        .task {
+            // Delay focus until the sheet presentation animation completes,
+            // otherwise the keyboard can collide with the transition.
+            try? await Task.sleep(for: .milliseconds(400))
+            isEditorFocused = true
         }
     }
 }
