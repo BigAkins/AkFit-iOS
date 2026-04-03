@@ -579,6 +579,8 @@ struct SettingsView: View {
         .environment(auth)
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(DailyNoteStore())
+        .environment(GroceryListStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }
@@ -604,6 +606,8 @@ struct SettingsView: View {
         .environment(auth)
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(DailyNoteStore())
+        .environment(GroceryListStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }
@@ -613,6 +617,8 @@ struct SettingsView: View {
         .environment(AuthManager(previewMode: true))
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(DailyNoteStore())
+        .environment(GroceryListStore())
         .environment(HealthKitService())
         .environment(NotificationService())
 }

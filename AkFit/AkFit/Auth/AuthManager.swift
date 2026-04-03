@@ -102,6 +102,14 @@ final class AuthManager {
             self.userState = .guest
         }
         Task { await startAuthObserver() }
+        // Safety timeout: if the Supabase auth stream never yields an event
+        // (SDK issue, network failure at cold start), clear `isLoading` after
+        // 10 seconds so the user isn't stuck on a blank screen forever.
+        // The auth observer normally clears `isLoading` in < 1 second.
+        Task {
+            try? await Task.sleep(for: .seconds(10))
+            if isLoading { isLoading = false }
+        }
     }
 
     /// Preview / test initializer. Skips the Supabase observer so no network

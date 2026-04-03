@@ -47,6 +47,9 @@ struct SearchView: View {
     @Environment(AppRouter.self)            private var router
 
     @State private var newGroceryItem: String = ""
+    /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
+    /// Set `true` before the insert call; cleared after it completes.
+    @State private var isQuickLogging = false
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -365,10 +368,12 @@ struct SearchView: View {
     /// history exists. Favorites store per-serving nutrition — `lastQuantity`
     /// supplies the repeat-use multiplier from `recentFoods`.
     private func quickLog(_ fav: FavoriteFood) {
-        guard let userId = authManager.currentUserId else { return }
+        guard !isQuickLogging, let userId = authManager.currentUserId else { return }
         let food = fav.asFoodItem()
         let qty  = logStore.lastQuantity(for: food) ?? 1.0
+        isQuickLogging = true
         Task {
+            defer { isQuickLogging = false }
             try? await logStore.insert(food: food, quantity: qty, mealSlot: .inferred(), for: userId)
             if let entry = logStore.lastLoggedEntry {
                 await healthKit.exportFoodLog(entry)
@@ -383,8 +388,10 @@ struct SearchView: View {
     /// Meal slot is inferred from the current time (not copied from the
     /// original log) since the user is logging this food right now.
     private func quickLog(_ log: FoodLog) {
-        guard let userId = authManager.currentUserId else { return }
+        guard !isQuickLogging, let userId = authManager.currentUserId else { return }
+        isQuickLogging = true
         Task {
+            defer { isQuickLogging = false }
             try? await logStore.insert(
                 food:     log.asFoodItem(),
                 quantity: log.quantity,
