@@ -582,22 +582,27 @@ struct SearchView: View {
     }
 
     /// Returns up to 6 suggestion terms that match `query`, ranked by
-    /// prefix match quality (prefix hits first, then shorter names first).
+    /// match quality (prefix hits first, word-prefix hits next, then shorter
+    /// names). Supports multi-word queries: every query word must appear
+    /// somewhere in the normalized food name so "greek van" matches
+    /// "Greek Yogurt, Vanilla" and "chick sand" matches
+    /// "Chick-fil-A Chicken Sandwich".
     private func matchingSuggestions(for query: String) -> [String] {
         let normalized = SupabaseFoodSearchService.normalizeForSearch(query)
         guard normalized.count >= 1 else { return [] }
 
+        let words = normalized.split(separator: " ").map(String.init)
+
         return suggestionPool
-            .filter {
-                SupabaseFoodSearchService.normalizeForSearch($0).contains(normalized)
+            .filter { term in
+                let n = SupabaseFoodSearchService.normalizeForSearch(term)
+                return words.allSatisfy { n.contains($0) }
             }
             .sorted { a, b in
-                let na = SupabaseFoodSearchService.normalizeForSearch(a)
-                let nb = SupabaseFoodSearchService.normalizeForSearch(b)
-                let aPre = na.hasPrefix(normalized)
-                let bPre = nb.hasPrefix(normalized)
-                if aPre != bPre { return aPre }
-                return a.count < b.count     // shorter = simpler / more common
+                let sa = SupabaseFoodSearchService.matchScore(name: a, query: normalized)
+                let sb = SupabaseFoodSearchService.matchScore(name: b, query: normalized)
+                if sa != sb { return sa < sb }
+                return a.count < b.count
             }
             .prefix(6)
             .map { $0 }

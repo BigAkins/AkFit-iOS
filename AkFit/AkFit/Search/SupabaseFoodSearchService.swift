@@ -20,18 +20,43 @@ struct SupabaseFoodSearchService: FoodSearchService {
         let normalized = Self.normalizeForSearch(q)
         guard !normalized.isEmpty else { return [] }
 
+        let words = normalized.split(separator: " ").map(String.init)
+
         do {
-            let rows: [GenericFoodRow] = try await SupabaseClientProvider.shared
-                .from("generic_foods")
-                .select()
-                .ilike("search_text", pattern: "%\(normalized)%")
-                .order("food_name")
-                .limit(30)
-                .execute()
-                .value
+            let rows: [GenericFoodRow]
+
+            if words.count <= 1 {
+                // Single word: direct substring match via ilike.
+                rows = try await SupabaseClientProvider.shared
+                    .from("generic_foods")
+                    .select()
+                    .ilike("search_text", pattern: "%\(normalized)%")
+                    .order("food_name")
+                    .limit(30)
+                    .execute()
+                    .value
+            } else {
+                // Multi-word: query by the longest (most selective) word, then
+                // filter client-side so ALL words must be present. This handles
+                // non-contiguous queries like "greek van" → "Greek Yogurt, Vanilla"
+                // or "chick sand" → "Chick-fil-A Chicken Sandwich".
+                let pivot = words.max(by: { $0.count < $1.count }) ?? normalized
+                let candidates: [GenericFoodRow] = try await SupabaseClientProvider.shared
+                    .from("generic_foods")
+                    .select()
+                    .ilike("search_text", pattern: "%\(pivot)%")
+                    .order("food_name")
+                    .limit(100)
+                    .execute()
+                    .value
+                rows = candidates.filter { row in
+                    let n = Self.normalizeForSearch(row.foodName)
+                    return words.allSatisfy { n.contains($0) }
+                }
+            }
+
             // Re-rank client-side by match quality so exact/prefix matches surface
-            // before weaker substring hits.  E.g. searching "bacon" shows
-            // "Bacon, cooked" (prefix → rank 1) before "Turkey Bacon" (word-prefix → rank 3).
+            // before weaker substring hits.
             return rows.map(FoodItem.init).sorted { a, b in
                 let sa = Self.matchScore(name: a.name, query: normalized)
                 let sb = Self.matchScore(name: b.name, query: normalized)
@@ -62,22 +87,48 @@ struct SupabaseFoodSearchService: FoodSearchService {
             .joined(separator: " ")
     }
 
-    /// Scores how closely `name` matches `query` (both normalized).
+    /// Scores how closely `name` matches `query` (both already normalized).
     /// Lower = better match.
     ///
-    /// 0 – exact match          ("egg" → "egg")
-    /// 1 – name starts with     ("bacon" → "Bacon, cooked")
-    /// 2 – first word exact     ("egg" → "Egg, whole")
-    /// 3 – any word starts with ("bacon" → "Turkey Bacon")
-    /// 4 – substring only       ("rice" → "White Rice, cooked")
-    private static func matchScore(name: String, query q: String) -> Int {
+    /// Single-word query:
+    ///   0 – exact match          ("egg" → "egg")
+    ///   1 – name starts with     ("bacon" → "bacon cooked")
+    ///   2 – first word exact     ("egg" → "egg whole")
+    ///   3 – any word starts with ("bacon" → "turkey bacon")
+    ///   4 – substring only       ("rice" → "white rice cooked")
+    ///
+    /// Multi-word query:
+    ///   0 – exact match
+    ///   1 – name starts with full query OR every query word matches a
+    ///       name-word prefix and the first word aligns
+    ///   2 – every query word matches a name-word prefix
+    ///   3 – all words present as substrings (guaranteed by filter)
+    static func matchScore(name: String, query q: String) -> Int {
         let n = normalizeForSearch(name)
-        if n == q                                                     { return 0 }
-        if n.hasPrefix(q)                                             { return 1 }
-        let words = n.split(separator: " ").map(String.init)
-        if words.first == q                                           { return 2 }
-        if words.contains(where: { $0.hasPrefix(q) })                { return 3 }
-        return 4
+        if n == q { return 0 }
+        if n.hasPrefix(q) { return 1 }
+
+        let qWords = q.split(separator: " ").map(String.init)
+        let nWords = n.split(separator: " ").map(String.init)
+
+        if qWords.count <= 1 {
+            if nWords.first == q                              { return 2 }
+            if nWords.contains(where: { $0.hasPrefix(q) })   { return 3 }
+            return 4
+        }
+
+        // Multi-word: check if every query word is a prefix of some name word.
+        let allWordPrefixes = qWords.allSatisfy { qw in
+            nWords.contains(where: { $0.hasPrefix(qw) })
+        }
+        if allWordPrefixes {
+            // Boost when the first query word matches the first name word.
+            if let fq = qWords.first, let fn = nWords.first, fn.hasPrefix(fq) {
+                return 1
+            }
+            return 2
+        }
+        return 3
     }
 
     /// Returns a small, curated set of foods for the empty-state "Suggestions"
@@ -136,7 +187,7 @@ struct SupabaseFoodSearchService: FoodSearchService {
                 .from("generic_foods")
                 .select("food_name, brand")
                 .order("food_name")
-                .limit(500)
+                .limit(1500)
                 .execute()
                 .value
             var terms = Set<String>()
