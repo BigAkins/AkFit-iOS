@@ -89,6 +89,18 @@ struct SearchView: View {
                     noResultsView
                 }
             }
+            .overlay(alignment: .top) {
+                Group {
+                    if shouldShowSuggestions {
+                        suggestionPanelView
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: -8)),
+                                removal: .opacity
+                            ))
+                    }
+                }
+                .animation(.easeOut(duration: 0.15), value: shouldShowSuggestions)
+            }
             .navigationTitle("Search")
             .searchable(
                 text: $query,
@@ -294,40 +306,16 @@ struct SearchView: View {
     }
 
     /// Shown while a debounce delay or network request is in progress and
-    /// there are no stale results to display. Shows matching type-ahead
-    /// suggestions above the loading indicator — tapping one fills the
-    /// search field and triggers a new search.
+    /// there are no stale results to display.
     private var loadingView: some View {
-        List {
-            summarySection
-            let q = query.trimmingCharacters(in: .whitespaces)
-            let matches = matchingSuggestions(for: q)
-            if !matches.isEmpty {
-                Section("Suggestions") {
-                    ForEach(matches, id: \.self) { term in
-                        Button {
-                            query = term
-                        } label: {
-                            Label(term, systemImage: "magnifyingglass")
-                        }
-                        .foregroundStyle(.primary)
-                    }
-                }
-            }
-            Section {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .scaleEffect(0.8)
-                    Text("Searching…")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.vertical, 12)
-                .listRowSeparator(.hidden)
-            }
+        VStack(spacing: 10) {
+            Spacer()
+            ProgressView()
+            Text("Searching…")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
         }
-        .listStyle(.insetGrouped)
     }
 
     private var noResultsView: some View {
@@ -502,6 +490,51 @@ struct SearchView: View {
     }
 
     // MARK: - Type-ahead suggestions
+
+    /// `true` when the floating suggestion panel should be visible: the user
+    /// has typed something, no results are showing yet, and at least one
+    /// suggestion matches the current query.
+    private var shouldShowSuggestions: Bool {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty, results.isEmpty else { return false }
+        return !matchingSuggestions(for: q).isEmpty
+    }
+
+    /// Floating panel of type-ahead suggestions. Positioned via `.overlay`
+    /// at the top of the content area, just below the search bar. Uses a
+    /// material background and shadow for a pop-up feel without relying on
+    /// the buggy system `.searchSuggestions` overlay.
+    private var suggestionPanelView: some View {
+        let matches = matchingSuggestions(for: query.trimmingCharacters(in: .whitespaces))
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(matches.indices, id: \.self) { i in
+                Button {
+                    query = matches[i]
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
+                        Text(matches[i])
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if i < matches.count - 1 {
+                    Divider().padding(.leading, 42)
+                }
+            }
+        }
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .shadow(color: .black.opacity(0.12), radius: 8, x: 0, y: 4)
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
 
     /// Builds a pool of suggestion terms from popular searches, recent logs,
     /// and favorites. Deduplicated via `Set` to avoid repeated entries.
