@@ -76,8 +76,21 @@ private struct RootView: View {
     var body: some View {
         Group {
             if authManager.isLoading {
-                Color(UIColor.systemBackground)
-                    .ignoresSafeArea()
+                // Branded loading screen — visible only while the auth
+                // observer resolves the initial session (typically < 1s).
+                VStack {
+                    Spacer()
+                    Image("akfit_logo")
+                        .resizable()
+                        .renderingMode(.template)
+                        .scaledToFit()
+                        .frame(height: 72)
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(UIColor.systemBackground))
+                .ignoresSafeArea()
             } else if authManager.userState == .signedOut {
                 AuthView()
             } else if authManager.userState == .authenticated && authManager.dataFetchFailed {
