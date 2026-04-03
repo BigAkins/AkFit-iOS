@@ -14,11 +14,17 @@ struct SupabaseFoodSearchService: FoodSearchService {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2, !Task.isCancelled else { return [] }
 
+        // Normalize the query the same way the DB search_text column is normalized:
+        // remove apostrophes, replace hyphens with spaces, collapse whitespace.
+        // This lets "chick fil a", "in n out", "mcdonalds" match branded names.
+        let normalized = Self.normalizeForSearch(q)
+        guard !normalized.isEmpty else { return [] }
+
         do {
             let rows: [GenericFoodRow] = try await SupabaseClientProvider.shared
                 .from("generic_foods")
                 .select()
-                .ilike("food_name", pattern: "%\(q)%")
+                .ilike("search_text", pattern: "%\(normalized)%")
                 .order("food_name")
                 .limit(30)
                 .execute()
@@ -26,10 +32,9 @@ struct SupabaseFoodSearchService: FoodSearchService {
             // Re-rank client-side by match quality so exact/prefix matches surface
             // before weaker substring hits.  E.g. searching "bacon" shows
             // "Bacon, cooked" (prefix → rank 1) before "Turkey Bacon" (word-prefix → rank 3).
-            let ql = q.lowercased()
             return rows.map(FoodItem.init).sorted { a, b in
-                let sa = Self.matchScore(name: a.name, query: ql)
-                let sb = Self.matchScore(name: b.name, query: ql)
+                let sa = Self.matchScore(name: a.name, query: normalized)
+                let sb = Self.matchScore(name: b.name, query: normalized)
                 if sa != sb { return sa < sb }
                 // Within the same rank, shorter names are simpler/more generic.
                 return a.name.count < b.name.count
@@ -39,7 +44,25 @@ struct SupabaseFoodSearchService: FoodSearchService {
         }
     }
 
-    /// Scores how closely `name` matches `query` (both should be lowercased).
+    /// Normalizes text for search comparison: lowercased, apostrophes removed,
+    /// hyphens/parentheses replaced with spaces, whitespace collapsed.
+    /// Mirrors the Postgres `search_text` column transform.
+    ///
+    /// Internal access so `SearchView` can use the same normalization for
+    /// type-ahead suggestion matching.
+    static func normalizeForSearch(_ text: String) -> String {
+        text.lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "\u{2019}", with: "")   // right single quote (iOS keyboard)
+            .replacingOccurrences(of: "\u{2018}", with: "")   // left single quote
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "(", with: " ")
+            .replacingOccurrences(of: ")", with: " ")
+            .split(separator: " ")
+            .joined(separator: " ")
+    }
+
+    /// Scores how closely `name` matches `query` (both normalized).
     /// Lower = better match.
     ///
     /// 0 – exact match          ("egg" → "egg")
@@ -48,7 +71,7 @@ struct SupabaseFoodSearchService: FoodSearchService {
     /// 3 – any word starts with ("bacon" → "Turkey Bacon")
     /// 4 – substring only       ("rice" → "White Rice, cooked")
     private static func matchScore(name: String, query q: String) -> Int {
-        let n = name.lowercased()
+        let n = normalizeForSearch(name)
         if n == q                                                     { return 0 }
         if n.hasPrefix(q)                                             { return 1 }
         let words = n.split(separator: " ").map(String.init)

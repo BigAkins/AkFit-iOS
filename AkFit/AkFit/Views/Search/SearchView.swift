@@ -55,6 +55,25 @@ struct SearchView: View {
     /// Used exclusively to populate the empty-state suggestions from Supabase.
     private let suggestionService = SupabaseFoodSearchService()
 
+    /// Popular search terms for type-ahead suggestions. Covers the chain brands
+    /// and generic foods in our curated database so users can discover them
+    /// without guessing exact names.
+    private static let popularTerms: [String] = [
+        "Chicken Breast", "Chicken Thigh", "Ground Beef", "Ground Turkey",
+        "Salmon", "Tuna", "Shrimp", "Tilapia",
+        "Egg", "Greek Yogurt", "Cottage Cheese", "Protein",
+        "Rice", "Oats", "Pasta", "Bread", "Potato", "Sweet Potato",
+        "Banana", "Apple", "Avocado", "Broccoli",
+        "Peanut Butter", "Almonds", "Bacon", "Turkey Bacon",
+        "McDonald's", "Chick-fil-A", "Chipotle", "Taco Bell",
+        "Wendy's", "Subway", "Panera", "Starbucks",
+        "In-N-Out", "Popeyes", "Raising Cane's", "Whataburger",
+        "CAVA", "QDOBA", "MOD Pizza",
+        "Quest Bar", "Clif Bar", "Cheetos", "Doritos",
+        "Trader Joe's", "Great Value",
+        "Jollof Rice", "Pounded Yam", "Suya", "Egusi Soup",
+    ]
+
     var body: some View {
         NavigationStack {
             Group {
@@ -76,6 +95,15 @@ struct SearchView: View {
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search food..."
             )
+            .searchSuggestions {
+                let q = query.trimmingCharacters(in: .whitespaces)
+                if !q.isEmpty {
+                    ForEach(matchingSuggestions(for: q), id: \.self) { term in
+                        Label(term, systemImage: "magnifyingglass")
+                            .searchCompletion(term)
+                    }
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
@@ -456,6 +484,40 @@ struct SearchView: View {
             bannerEntry = nil
         }
         Task { try? await logStore.delete(logId: entry.id) }
+    }
+
+    // MARK: - Type-ahead suggestions
+
+    /// Builds a pool of suggestion terms from popular searches, recent logs,
+    /// and favorites. Deduplicated via `Set` to avoid repeated entries.
+    private var suggestionPool: [String] {
+        var pool = Set<String>()
+        for term in Self.popularTerms { pool.insert(term) }
+        for log  in logStore.recentFoods { pool.insert(log.foodName) }
+        for fav  in favStore.favorites   { pool.insert(fav.foodName) }
+        return pool.sorted()
+    }
+
+    /// Returns up to 6 suggestion terms that match `query`, ranked by
+    /// prefix match quality (prefix hits first, then shorter names first).
+    private func matchingSuggestions(for query: String) -> [String] {
+        let normalized = SupabaseFoodSearchService.normalizeForSearch(query)
+        guard normalized.count >= 1 else { return [] }
+
+        return suggestionPool
+            .filter {
+                SupabaseFoodSearchService.normalizeForSearch($0).contains(normalized)
+            }
+            .sorted { a, b in
+                let na = SupabaseFoodSearchService.normalizeForSearch(a)
+                let nb = SupabaseFoodSearchService.normalizeForSearch(b)
+                let aPre = na.hasPrefix(normalized)
+                let bPre = nb.hasPrefix(normalized)
+                if aPre != bPre { return aPre }
+                return a.count < b.count     // shorter = simpler / more common
+            }
+            .prefix(6)
+            .map { $0 }
     }
 
     // MARK: - Search logic

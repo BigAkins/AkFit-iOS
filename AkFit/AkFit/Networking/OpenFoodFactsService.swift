@@ -47,11 +47,17 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
 
     // MARK: - FoodSearchService
 
-    /// Returns up to 20 matching packaged foods from Open Food Facts.
+    /// Returns up to 15 matching packaged foods from Open Food Facts.
     ///
     /// Returns an empty array on network errors or cancellation — `SearchView`
     /// shows its existing "no results" state in that case.
     /// Requires at least 2 characters to avoid noise from single-character queries.
+    ///
+    /// Results pass through two quality gates:
+    /// 1. `toFoodItem` rejects products with missing/unusable names, non-Latin
+    ///    scripts, clearly invalid nutrition, and ugly formatting.
+    /// 2. `isSearchQuality` rejects zero-nutrition ghost entries and items with
+    ///    implausibly high calories (> 1 500 per serving).
     func search(query: String) async -> [FoodItem] {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2, !Task.isCancelled else { return [] }
@@ -59,17 +65,47 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
         do {
             let products = try await fetchSearch(query: q)
             // Sort so products with an explicit English name are processed first.
-            // This means the 20-item prefix cap favours English-language results
-            // even when OFF returns a mixed-language set.
+            // This means the prefix cap favours English-language results even when
+            // OFF returns a mixed-language set.
             let sorted = products.sorted { a, b in
                 let aHasEn = a.productNameEn.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
                 let bHasEn = b.productNameEn.map { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ?? false
                 return aHasEn && !bHasEn
             }
-            return sorted.compactMap(Self.toFoodItem).prefix(20).map { $0 }
+            return sorted
+                .compactMap(Self.toFoodItem)
+                .filter(Self.isSearchQuality)
+                .prefix(15)
+                .map { $0 }
         } catch {
             return []
         }
+    }
+
+    /// Additional quality filter applied only to search results (not barcode
+    /// lookups, which are verified products with a known barcode).
+    ///
+    /// Catches zero-nutrition ghost entries and implausibly high-calorie items
+    /// that survive `toFoodItem`'s general validation.
+    private static func isSearchQuality(_ item: FoodItem) -> Bool {
+        // Reject zero-nutrition entries (water, empty stubs)
+        let hasAnyNutrition = item.calories > 0
+            || item.proteinG > 0
+            || item.carbsG > 0
+            || item.fatG > 0
+        guard hasAnyNutrition else { return false }
+
+        // Reject items with non-zero calories but all macros zero — almost
+        // certainly a data-entry error where only the energy field was filled.
+        if item.calories > 0 && item.proteinG == 0 && item.carbsG == 0 && item.fatG == 0 {
+            return false
+        }
+
+        // 1 500 kcal per serving is the practical upper bound for search results.
+        // Barcode lookups keep the original 5 000 cap via `toFoodItem`.
+        guard item.calories <= 1_500 else { return false }
+
+        return true
     }
 
     // MARK: - BarcodeLookupService
@@ -159,6 +195,9 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
         // accented Western-language names (French, Spanish, German, etc.).
         guard Self.isLatinScript(name) else { return nil }
 
+        // Reject very short or excessively long names.
+        guard name.count >= 3, name.count <= 100 else { return nil }
+
         let n          = product.nutriments
         let useServing = (product.servingQuantity ?? 0) > 0
 
@@ -220,17 +259,79 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
             if !trimmed.isEmpty { brand = trimmed }
         }
 
+        // Clean up name and serving label for display quality.
+        let cleanedName    = Self.cleanProductName(name, brand: brand)
+        let cleanedServing = Self.cleanServingLabel(servingSize)
+        guard cleanedName.count >= 3 else { return nil }
+
         return FoodItem(
             id:              UUID(),
-            name:            name,
+            name:            cleanedName,
             brandOrCategory: brand,
-            servingSize:     servingSize,
+            servingSize:     cleanedServing,
             servingWeightG:  servingWeightG,
             calories:        calories,
             proteinG:        protein,
             carbsG:          carbs,
             fatG:            fat
         )
+    }
+
+    // MARK: - Name & serving cleanup
+
+    /// Cleans a product name for display:
+    /// - Strips leading/trailing quotes and stray punctuation.
+    /// - Removes doubled brand prefix ("Coca-Cola Coca-Cola Classic" → "Coca-Cola Classic").
+    private static func cleanProductName(_ name: String, brand: String?) -> String {
+        var result = name
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // "Brand Brand Foo" or "Brand - Brand Foo" → "Brand Foo"
+        if let b = brand, !b.isEmpty {
+            for sep in [" ", " - "] {
+                let doubled = b + sep + b
+                if result.lowercased().hasPrefix(doubled.lowercased()) {
+                    result = String(result.dropFirst(b.count + sep.count))
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    break
+                }
+            }
+        }
+
+        return result
+    }
+
+    /// Cleans a serving label for display:
+    /// - Rounds ugly floating-point metric values ("354.881999mL" → "355mL").
+    /// - Truncates overly long labels.
+    private static func cleanServingLabel(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return s }
+
+        // Round metric values with 3+ decimal places: "354.881999mL" → "355mL"
+        // Keeps values with 1–2 decimal places intact ("12.5g" stays).
+        let regex = try! NSRegularExpression(
+            pattern: #"(\d+\.\d{3,})\s*(m[lL]|g|kg|oz)"#
+        )
+        let ns = s as NSString
+        if let match = regex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)),
+           let numRange = Range(match.range(at: 1), in: s),
+           let unitRange = Range(match.range(at: 2), in: s),
+           let fullRange = Range(match.range, in: s),
+           let value = Double(s[numRange])
+        {
+            let rounded = Int(value.rounded())
+            s.replaceSubrange(fullRange, with: "\(rounded)\(s[unitRange])")
+        }
+
+        // Truncate overly long labels to keep rows compact.
+        if s.count > 60 {
+            s = String(s.prefix(57)) + "…"
+        }
+
+        return s
     }
 
     // MARK: - Helpers
