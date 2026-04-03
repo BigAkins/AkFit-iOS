@@ -60,16 +60,19 @@ extension FoodLog {
     /// `FoodDetailView` handles this gracefully by omitting the "· Xg total"
     /// subtitle when `servingWeightG` is 0.
     func asFoodItem() -> FoodItem {
-        FoodItem(
+        // Guard against division by zero. The DB enforces quantity > 0, but
+        // defensive coding protects against corrupted or guest-cached data.
+        let q = quantity > 0 ? quantity : 1
+        return FoodItem(
             id:              UUID(),
             name:            foodName,
             brandOrCategory: nil,
             servingSize:     servingLabel,
             servingWeightG:  0,
-            calories:        Int((Double(calories) / quantity).rounded()),
-            proteinG:        proteinG / quantity,
-            carbsG:          carbsG   / quantity,
-            fatG:            fatG     / quantity
+            calories:        Int((Double(calories) / q).rounded()),
+            proteinG:        proteinG / q,
+            carbsG:          carbsG   / q,
+            fatG:            fatG     / q
         )
     }
 }

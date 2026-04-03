@@ -329,9 +329,20 @@ final class AuthManager {
             throw DeleteAccountError.serverError
         }
         // Sign out locally. The JWT is now invalid (user deleted on server),
-        // so signOut may return an error — ignore it. The authStateChanges
-        // stream will fire .signedOut and RootView re-routes automatically.
-        try? await SupabaseClientProvider.shared.auth.signOut()
+        // so signOut may return an error. The authStateChanges stream normally
+        // fires .signedOut and RootView re-routes automatically.
+        do {
+            try await SupabaseClientProvider.shared.auth.signOut()
+        } catch {
+            // Local signOut failed (invalid JWT, network issue) and the auth
+            // observer may not fire. Force-clear session state so the user
+            // isn't stuck in an authenticated state with a deleted account.
+            self.session         = nil
+            self._serverProfile  = nil
+            self._serverGoal     = nil
+            self.dataFetchFailed = false
+            self.userState       = .signedOut
+        }
     }
 
     func signInWithApple(idToken: String, rawNonce: String) async throws {
