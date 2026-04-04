@@ -586,7 +586,9 @@ struct SearchView: View {
     /// names). Supports multi-word queries, stem-aware matching ("strawberry"
     /// finds "Strawberries"), and fuzzy fallback for typos.
     private func matchingSuggestions(for query: String) -> [String] {
-        let normalized = SupabaseFoodSearchService.normalizeForSearch(query)
+        let normalized = SupabaseFoodSearchService.applyQueryAliases(
+            SupabaseFoodSearchService.normalizeForSearch(query)
+        )
         guard normalized.count >= 1 else { return [] }
 
         let words = normalized.split(separator: " ").map(String.init)

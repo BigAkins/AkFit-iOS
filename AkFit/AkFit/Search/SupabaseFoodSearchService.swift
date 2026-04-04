@@ -16,8 +16,8 @@ struct SupabaseFoodSearchService: FoodSearchService {
 
         // Normalize the query the same way the DB search_text column is normalized:
         // remove apostrophes, replace hyphens with spaces, collapse whitespace.
-        // This lets "chick fil a", "in n out", "mcdonalds" match branded names.
-        let normalized = Self.normalizeForSearch(q)
+        // Then apply known aliases (e.g. "innout" → "in n out").
+        let normalized = Self.applyQueryAliases(Self.normalizeForSearch(q))
         guard !normalized.isEmpty else { return [] }
 
         let words = normalized.split(separator: " ").map(String.init)
@@ -76,6 +76,25 @@ struct SupabaseFoodSearchService: FoodSearchService {
         } catch {
             return []
         }
+    }
+
+    /// Rewrites known query aliases to their canonical normalized forms.
+    /// Called AFTER `normalizeForSearch` so the input is already lowercased
+    /// with punctuation stripped. Handles cases where normalization alone
+    /// can't bridge the gap (e.g. "innout" → "in n out").
+    static func applyQueryAliases(_ normalized: String) -> String {
+        // Longest patterns first to avoid partial replacement.
+        let aliases: [(from: String, to: String)] = [
+            ("in and out", "in n out"),
+            ("innout", "in n out"),
+        ]
+        var result = normalized
+        for alias in aliases {
+            if result.contains(alias.from) {
+                result = result.replacingOccurrences(of: alias.from, with: alias.to)
+            }
+        }
+        return result
     }
 
     /// Normalizes text for search comparison: lowercased, apostrophes removed,
