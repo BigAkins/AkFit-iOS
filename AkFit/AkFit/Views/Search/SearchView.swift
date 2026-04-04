@@ -583,24 +583,57 @@ struct SearchView: View {
 
     /// Returns up to 6 suggestion terms that match `query`, ranked by
     /// match quality (prefix hits first, word-prefix hits next, then shorter
-    /// names). Supports multi-word queries: every query word must appear
-    /// somewhere in the normalized food name so "greek van" matches
-    /// "Greek Yogurt, Vanilla" and "chick sand" matches
-    /// "Chick-fil-A Chicken Sandwich".
+    /// names). Supports multi-word queries, stem-aware matching ("strawberry"
+    /// finds "Strawberries"), and fuzzy fallback for typos.
     private func matchingSuggestions(for query: String) -> [String] {
         let normalized = SupabaseFoodSearchService.normalizeForSearch(query)
         guard normalized.count >= 1 else { return [] }
 
         let words = normalized.split(separator: " ").map(String.init)
+        let stemmedWords = words.map { SupabaseFoodSearchService.stemWord($0) }
+        let isPlainFoodQuery = words.count <= 2 && words.allSatisfy { $0.allSatisfy(\.isLetter) }
 
-        return suggestionPool
-            .filter { term in
-                let n = SupabaseFoodSearchService.normalizeForSearch(term)
-                return words.allSatisfy { n.contains($0) }
+        // Substring + stem matching (primary)
+        var matches = suggestionPool.filter { term in
+            let n = SupabaseFoodSearchService.normalizeForSearch(term)
+            let nStemmed = SupabaseFoodSearchService.stemmedForm(n)
+            return words.allSatisfy { n.contains($0) } ||
+                   stemmedWords.allSatisfy { sw in nStemmed.contains(sw) }
+        }
+
+        // Fuzzy fallback: if fewer than 3 substring matches, try edit distance
+        // on each word of the food name. Only for queries ≥ 3 chars to avoid
+        // noise on very short inputs.
+        if matches.count < 3 && normalized.count >= 3 {
+            let fuzzy = suggestionPool.filter { term in
+                guard !matches.contains(term) else { return false }
+                let nWords = SupabaseFoodSearchService.normalizeForSearch(term)
+                    .split(separator: " ").map(String.init)
+                return words.allSatisfy { qw in
+                    nWords.contains { nw in
+                        // Allow edit distance ≤ 2, but scale: for short words (≤4 chars) only allow 1
+                        let maxDist = qw.count <= 4 ? 1 : 2
+                        return SupabaseFoodSearchService.editDistance(qw, nw) <= maxDist ||
+                               SupabaseFoodSearchService.editDistance(
+                                   SupabaseFoodSearchService.stemWord(qw),
+                                   SupabaseFoodSearchService.stemWord(nw)
+                               ) <= maxDist
+                    }
+                }
             }
+            matches.append(contentsOf: fuzzy)
+        }
+
+        return matches
             .sorted { a, b in
-                let sa = SupabaseFoodSearchService.matchScore(name: a, query: normalized)
-                let sb = SupabaseFoodSearchService.matchScore(name: b, query: normalized)
+                var sa = SupabaseFoodSearchService.matchScore(name: a, query: normalized)
+                var sb = SupabaseFoodSearchService.matchScore(name: b, query: normalized)
+                if isPlainFoodQuery {
+                    let na = SupabaseFoodSearchService.normalizeForSearch(a)
+                    let nb = SupabaseFoodSearchService.normalizeForSearch(b)
+                    if SupabaseFoodSearchService.isDessertOrProcessed(na) { sa += 1 }
+                    if SupabaseFoodSearchService.isDessertOrProcessed(nb) { sb += 1 }
+                }
                 if sa != sb { return sa < sb }
                 return a.count < b.count
             }

@@ -35,6 +35,7 @@ Config.local.xcconfig
 *.secrets
 CLAUDE.md
 .claude/
+.vscode/
 
 # Local app config overrides
 LocalConfig.swift

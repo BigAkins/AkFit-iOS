@@ -49,17 +49,26 @@ struct SupabaseFoodSearchService: FoodSearchService {
                     .limit(100)
                     .execute()
                     .value
+                let stemmedWords = words.map { Self.stemWord($0) }
                 rows = candidates.filter { row in
                     let n = Self.normalizeForSearch(row.foodName)
-                    return words.allSatisfy { n.contains($0) }
+                    let nStemmed = Self.stemmedForm(n)
+                    return words.allSatisfy { w in n.contains(w) } ||
+                           stemmedWords.allSatisfy { sw in nStemmed.contains(sw) }
                 }
             }
 
             // Re-rank client-side by match quality so exact/prefix matches surface
-            // before weaker substring hits.
+            // before weaker substring hits. Dessert/processed items get a penalty
+            // so whole foods rank above them for plain queries like "strawberry".
+            let isPlainFoodQuery = words.count <= 2 && words.allSatisfy { $0.allSatisfy(\.isLetter) }
             return rows.map(FoodItem.init).sorted { a, b in
-                let sa = Self.matchScore(name: a.name, query: normalized)
-                let sb = Self.matchScore(name: b.name, query: normalized)
+                var sa = Self.matchScore(name: a.name, query: normalized)
+                var sb = Self.matchScore(name: b.name, query: normalized)
+                if isPlainFoodQuery {
+                    if Self.isDessertOrProcessed(Self.normalizeForSearch(a.name)) { sa += 1 }
+                    if Self.isDessertOrProcessed(Self.normalizeForSearch(b.name)) { sb += 1 }
+                }
                 if sa != sb { return sa < sb }
                 // Within the same rank, shorter names are simpler/more generic.
                 return a.name.count < b.name.count
@@ -70,7 +79,7 @@ struct SupabaseFoodSearchService: FoodSearchService {
     }
 
     /// Normalizes text for search comparison: lowercased, apostrophes removed,
-    /// hyphens/parentheses replaced with spaces, whitespace collapsed.
+    /// hyphens/commas/parentheses replaced with spaces, whitespace collapsed.
     /// Mirrors the Postgres `search_text` column transform.
     ///
     /// Internal access so `SearchView` can use the same normalization for
@@ -81,21 +90,73 @@ struct SupabaseFoodSearchService: FoodSearchService {
             .replacingOccurrences(of: "\u{2019}", with: "")   // right single quote (iOS keyboard)
             .replacingOccurrences(of: "\u{2018}", with: "")   // left single quote
             .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: ",", with: " ")
             .replacingOccurrences(of: "(", with: " ")
             .replacingOccurrences(of: ")", with: " ")
             .split(separator: " ")
             .joined(separator: " ")
     }
 
+    /// Reduces a word to a rough stem by stripping common English plural
+    /// suffixes. Not a full Porter stemmer — just enough to map
+    /// "strawberries" ↔ "strawberry", "blueberries" ↔ "blueberry", etc.
+    static func stemWord(_ word: String) -> String {
+        let w = word.lowercased()
+        guard w.count > 3 else { return w }
+        // -ies → -y  (strawberries → strawberry)
+        if w.hasSuffix("ies") { return String(w.dropLast(3)) + "y" }
+        // -ches, -shes, -xes, -zes, -ses → drop -es
+        if w.hasSuffix("es") {
+            let stem = String(w.dropLast(2))
+            if stem.hasSuffix("ch") || stem.hasSuffix("sh") ||
+               stem.hasSuffix("x") || stem.hasSuffix("z") || stem.hasSuffix("s") {
+                return stem
+            }
+        }
+        // trailing -s (but not -ss) → drop -s
+        if w.hasSuffix("s") && !w.hasSuffix("ss") {
+            return String(w.dropLast(1))
+        }
+        return w
+    }
+
+    /// Stems every word in a normalized string for comparison.
+    static func stemmedForm(_ text: String) -> String {
+        text.split(separator: " ").map { stemWord(String($0)) }.joined(separator: " ")
+    }
+
+    /// Levenshtein edit distance between two strings. Used for typo tolerance
+    /// in type-ahead suggestions. O(n*m) but only called on short food names.
+    static func editDistance(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        let m = a.count, n = b.count
+        if m == 0 { return n }
+        if n == 0 { return m }
+        var prev = Array(0...n)
+        var curr = [Int](repeating: 0, count: n + 1)
+        for i in 1...m {
+            curr[0] = i
+            for j in 1...n {
+                let cost = a[i-1] == b[j-1] ? 0 : 1
+                curr[j] = min(prev[j] + 1, curr[j-1] + 1, prev[j-1] + cost)
+            }
+            prev = curr
+        }
+        return prev[n]
+    }
+
     /// Scores how closely `name` matches `query` (both already normalized).
-    /// Lower = better match.
+    /// Lower = better match. Supports stem-aware comparison so "strawberry"
+    /// matches "strawberries" at full quality, and applies a category penalty
+    /// for desserts/processed items when the query is a plain food word.
     ///
     /// Single-word query:
-    ///   0 – exact match          ("egg" → "egg")
-    ///   1 – name starts with     ("bacon" → "bacon cooked")
-    ///   2 – first word exact     ("egg" → "egg whole")
-    ///   3 – any word starts with ("bacon" → "turkey bacon")
-    ///   4 – substring only       ("rice" → "white rice cooked")
+    ///   0 – exact match or stem-exact   ("egg" → "egg", "strawberry" → "strawberries")
+    ///   1 – name starts with (or stemmed prefix)
+    ///   2 – first word exact/stem-exact
+    ///   3 – any word starts with
+    ///   4 – substring only
+    ///   +1 penalty for dessert/processed names when query looks like a plain food
     ///
     /// Multi-word query:
     ///   0 – exact match
@@ -106,29 +167,55 @@ struct SupabaseFoodSearchService: FoodSearchService {
     static func matchScore(name: String, query q: String) -> Int {
         let n = normalizeForSearch(name)
         if n == q { return 0 }
-        if n.hasPrefix(q) { return 1 }
+
+        let nStemmed = stemmedForm(n)
+        let qStemmed = stemmedForm(q)
+        if nStemmed == qStemmed { return 0 }
+
+        if n.hasPrefix(q) || nStemmed.hasPrefix(qStemmed) { return 1 }
 
         let qWords = q.split(separator: " ").map(String.init)
         let nWords = n.split(separator: " ").map(String.init)
+        let qStems = qWords.map { stemWord($0) }
+        let nStems = nWords.map { stemWord($0) }
 
         if qWords.count <= 1 {
-            if nWords.first == q                              { return 2 }
+            let qStem = qStems[0]
+            if nWords.first == q || nStems.first == qStem    { return 2 }
             if nWords.contains(where: { $0.hasPrefix(q) })   { return 3 }
+            if nStems.contains(where: { $0.hasPrefix(qStem) }) { return 3 }
             return 4
         }
 
-        // Multi-word: check if every query word is a prefix of some name word.
-        let allWordPrefixes = qWords.allSatisfy { qw in
-            nWords.contains(where: { $0.hasPrefix(qw) })
+        // Multi-word: check if every query word is a prefix of some name word
+        // (with stem-aware fallback).
+        let allWordPrefixes = qWords.indices.allSatisfy { i in
+            nWords.contains(where: { $0.hasPrefix(qWords[i]) }) ||
+            nStems.contains(where: { $0.hasPrefix(qStems[i]) })
         }
         if allWordPrefixes {
-            // Boost when the first query word matches the first name word.
-            if let fq = qWords.first, let fn = nWords.first, fn.hasPrefix(fq) {
+            if let fq = qWords.first, let fn = nWords.first,
+               fn.hasPrefix(fq) || stemWord(fn).hasPrefix(stemWord(fq)) {
                 return 1
             }
             return 2
         }
         return 3
+    }
+
+    /// Words that indicate a dessert or processed item. When the user's query
+    /// is a plain food word (e.g. "strawberry") these results should rank below
+    /// the whole-food match.
+    private static let dessertKeywords: Set<String> = [
+        "milkshake", "shake", "ice cream", "smoothie", "cake", "pie",
+        "cookie", "brownie", "muffin", "donut", "pastry", "candy",
+        "frosting", "sundae", "parfait",
+    ]
+
+    /// Returns `true` when a normalized food name looks like a dessert or
+    /// processed item — used to add a ranking penalty for plain food queries.
+    static func isDessertOrProcessed(_ normalizedName: String) -> Bool {
+        dessertKeywords.contains(where: { normalizedName.contains($0) })
     }
 
     /// Returns a small, curated set of foods for the empty-state "Suggestions"
