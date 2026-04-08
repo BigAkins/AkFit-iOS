@@ -36,7 +36,7 @@ Config.local.xcconfig
 CLAUDE.md
 .claude/
 .vscode/
-
+AGENTS.md
 # Local app config overrides
 LocalConfig.swift
 SupabaseConfig.local.swift
