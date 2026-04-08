@@ -329,6 +329,37 @@ final class AuthManager {
         try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
     }
 
+    /// Resolves a valid authenticated session before any write to RLS-protected
+    /// tables. `currentUserId` alone is not sufficient because the initial
+    /// auth event can surface an expired session before token refresh completes.
+    func requireAuthenticatedUserIDForWrite() async throws -> UUID {
+        guard userState == .authenticated else {
+            debugAuthWrite("write requested while userState=\(String(describing: userState))")
+            throw AuthError.sessionMissing
+        }
+
+        var lastError: Error?
+
+        for attempt in 1...2 {
+            do {
+                let validSession = try await SupabaseClientProvider.shared.auth.session
+                session = validSession
+                debugAuthWrite(
+                    "resolved write-ready session for user \(validSession.user.id.uuidString), attempt=\(attempt), expired=\(validSession.isExpired)"
+                )
+                return validSession.user.id
+            } catch {
+                lastError = error
+                debugAuthWrite("failed to resolve write-ready session on attempt \(attempt): \(error)")
+                if attempt == 1 {
+                    try? await Task.sleep(for: .milliseconds(350))
+                }
+            }
+        }
+
+        throw lastError ?? AuthError.sessionMissing
+    }
+
     // MARK: - Account deletion (authenticated path)
 
     /// Permanently deletes the authenticated user's account and all associated
@@ -356,20 +387,39 @@ final class AuthManager {
         guard session != nil else {
             throw DeleteAccountError.notAuthenticated
         }
+
+        let validSession: Session
+        do {
+            validSession = try await SupabaseClientProvider.shared.auth.session
+            session = validSession
+            SupabaseClientProvider.shared.functions.setAuth(token: validSession.accessToken)
+            debugDeleteAccount(
+                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired)"
+            )
+        } catch {
+            debugDeleteAccount("failed to resolve valid session before deletion: \(error)")
+            throw DeleteAccountError.notAuthenticated
+        }
+
         do {
             // The Supabase client attaches the active session token automatically.
             // The @discardableResult Data response is not needed here.
             try await SupabaseClientProvider.shared.functions
                 .invoke("delete-account")
         } catch {
+            debugDeleteAccount("edge function invocation failed: \(describeDeleteAccountError(error))")
             throw DeleteAccountError.serverError
         }
+
+        debugDeleteAccount("edge function deletion succeeded")
+
         // Sign out locally. The JWT is now invalid (user deleted on server),
         // so signOut may return an error. The authStateChanges stream normally
         // fires .signedOut and RootView re-routes automatically.
         do {
             try await SupabaseClientProvider.shared.auth.signOut()
         } catch {
+            debugDeleteAccount("local signOut failed after deletion: \(error)")
             // Local signOut failed (invalid JWT, network issue) and the auth
             // observer may not fire. Force-clear session state so the user
             // isn't stuck in an authenticated state with a deleted account.
@@ -452,6 +502,32 @@ final class AuthManager {
         } else {
             _serverProfile = profile
         }
+    }
+
+    private func describeDeleteAccountError(_ error: Error) -> String {
+        if let functionError = error as? FunctionsError {
+            switch functionError {
+            case .relayError:
+                return "relay error"
+            case let .httpError(code, data):
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                return "http \(code), body: \(body)"
+            }
+        }
+
+        return String(describing: error)
+    }
+
+    private func debugDeleteAccount(_ message: String) {
+        #if DEBUG
+        print("[DeleteAccount] \(message)")
+        #endif
+    }
+
+    private func debugAuthWrite(_ message: String) {
+        #if DEBUG
+        print("[AuthWrite] \(message)")
+        #endif
     }
 }
 
