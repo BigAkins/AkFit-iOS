@@ -37,6 +37,8 @@ CLAUDE.md
 .claude/
 .vscode/
 AGENTS.md
+docs/ui-reference/
+docs/supabase-reference/
 # Local app config overrides
 LocalConfig.swift
 SupabaseConfig.local.swift
