@@ -25,18 +25,19 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+const responseHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type',
+  'Content-Type': 'application/json',
+}
+
 Deno.serve(async (req: Request) => {
   const debug = Deno.env.get('AKFIT_FUNCTION_DEBUG') === '1'
 
   // CORS preflight — included for completeness; iOS clients don't require it.
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers':
-          'authorization, x-client-info, apikey, content-type',
-      },
-    })
+    return new Response('ok', { headers: responseHeaders })
   }
 
   if (req.method !== 'POST') {
@@ -121,6 +122,6 @@ Deno.serve(async (req: Request) => {
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: responseHeaders,
   })
 }
