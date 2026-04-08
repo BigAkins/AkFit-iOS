@@ -371,8 +371,10 @@ final class AuthManager {
     /// (food_logs, bodyweight_logs, user_goals/goals, profiles, favorite_foods,
     /// daily_notes, grocery_items).
     ///
-    /// The Supabase client automatically attaches the current access token to
-    /// the Authorization header — the service-role key never touches this app.
+    /// The edge function must receive the current session JWT in the
+    /// Authorization header. `supabase-swift` initialises the Functions client
+    /// with the anon key as its default bearer token, so this call passes the
+    /// session JWT explicitly per request.
     ///
     /// After a successful deletion `auth.signOut()` is called locally. The
     /// `authStateChanges` stream fires `.signedOut`, `userState` becomes
@@ -402,10 +404,18 @@ final class AuthManager {
         }
 
         do {
-            // The Supabase client attaches the active session token automatically.
-            // The @discardableResult Data response is not needed here.
+            debugDeleteAccount(
+                "invoking delete-account with session JWT \(maskedToken(validSession.accessToken))"
+            )
             try await SupabaseClientProvider.shared.functions
-                .invoke("delete-account")
+                .invoke(
+                    "delete-account",
+                    options: FunctionInvokeOptions(
+                        headers: [
+                            "Authorization": "Bearer \(validSession.accessToken)"
+                        ]
+                    )
+                )
         } catch {
             debugDeleteAccount("edge function invocation failed: \(describeDeleteAccountError(error))")
             throw DeleteAccountError.serverError
@@ -522,6 +532,11 @@ final class AuthManager {
         #if DEBUG
         print("[DeleteAccount] \(message)")
         #endif
+    }
+
+    private func maskedToken(_ token: String) -> String {
+        let suffix = String(token.suffix(8))
+        return "<len:\(token.count) suffix:\(suffix)>"
     }
 
     private func debugAuthWrite(_ message: String) {
