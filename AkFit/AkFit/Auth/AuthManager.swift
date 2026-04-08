@@ -390,18 +390,7 @@ final class AuthManager {
             throw DeleteAccountError.notAuthenticated
         }
 
-        let validSession: Session
-        do {
-            validSession = try await SupabaseClientProvider.shared.auth.session
-            session = validSession
-            SupabaseClientProvider.shared.functions.setAuth(token: validSession.accessToken)
-            debugDeleteAccount(
-                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired)"
-            )
-        } catch {
-            debugDeleteAccount("failed to resolve valid session before deletion: \(error)")
-            throw DeleteAccountError.notAuthenticated
-        }
+        let validSession = try await resolveDeleteAccountSession()
 
         do {
             debugDeleteAccount(
@@ -526,6 +515,91 @@ final class AuthManager {
         }
 
         return String(describing: error)
+    }
+
+    private func resolveDeleteAccountSession() async throws -> Session {
+        let auth = SupabaseClientProvider.shared.auth
+        let functionURL = AppConfig.supabaseURL
+            .appendingPathComponent("functions")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("delete-account")
+
+        debugDeleteAccount("app Supabase URL \(AppConfig.supabaseURL.absoluteString)")
+        debugDeleteAccount("delete-account function URL \(functionURL.absoluteString)")
+
+        var validSession: Session
+        do {
+            validSession = try await auth.session
+            session = validSession
+            debugDeleteAccount(
+                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+            )
+        } catch {
+            debugDeleteAccount("failed to resolve valid session before deletion: \(describeDeleteAccountAuthError(error))")
+            throw DeleteAccountError.notAuthenticated
+        }
+
+        do {
+            _ = try await auth.user(jwt: validSession.accessToken)
+            debugDeleteAccount("validated session JWT against current Supabase project")
+        } catch {
+            debugDeleteAccount("session JWT validation failed: \(describeDeleteAccountAuthError(error))")
+
+            guard isInvalidJWTError(error) else {
+                throw DeleteAccountError.serverError
+            }
+
+            do {
+                debugDeleteAccount("attempting session refresh after invalid JWT")
+                validSession = try await auth.refreshSession(refreshToken: validSession.refreshToken)
+                session = validSession
+                debugDeleteAccount(
+                    "refreshed session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                )
+                _ = try await auth.user(jwt: validSession.accessToken)
+                debugDeleteAccount("validated refreshed session JWT against current Supabase project")
+            } catch {
+                debugDeleteAccount("session refresh/revalidation failed: \(describeDeleteAccountAuthError(error))")
+                try? await auth.signOut(scope: .local)
+                clearAuthenticatedState()
+                throw DeleteAccountError.notAuthenticated
+            }
+        }
+
+        SupabaseClientProvider.shared.functions.setAuth(token: validSession.accessToken)
+        return validSession
+    }
+
+    private func describeDeleteAccountAuthError(_ error: Error) -> String {
+        if let authError = error as? AuthError {
+            switch authError {
+            case let .api(message, errorCode, underlyingData, underlyingResponse):
+                let body = String(data: underlyingData, encoding: .utf8) ?? "<non-utf8 body>"
+                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue), message: \(message), body: \(body)"
+            case let .jwtVerificationFailed(message):
+                return "jwt verification failed: \(message)"
+            default:
+                return authError.localizedDescription
+            }
+        }
+
+        return String(describing: error)
+    }
+
+    private func isInvalidJWTError(_ error: Error) -> Bool {
+        if let authError = error as? AuthError {
+            switch authError {
+            case .jwtVerificationFailed:
+                return true
+            case let .api(_, errorCode, _, _):
+                return errorCode == .invalidJWT || errorCode == .badJWT
+            default:
+                return false
+            }
+        }
+
+        let description = String(describing: error).lowercased()
+        return description.contains("invalid jwt") || description.contains("bad jwt")
     }
 
     private func debugDeleteAccount(_ message: String) {
