@@ -377,13 +377,21 @@ struct SettingsView: View {
                         .foregroundStyle(.green)
                         .font(.footnote.weight(.semibold))
                 } else if healthKit.authStatus == .notDetermined {
-                    Button("Connect") {
+                    Button {
                         Task { await healthKit.requestAuthorization() }
+                    } label: {
+                        if healthKit.isRequesting {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Text("Connect")
+                        }
                     }
                     .font(.subheadline)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .tint(.primary)
+                    .disabled(healthKit.isRequesting)
                 }
             }
             .padding(.vertical, 2)

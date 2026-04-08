@@ -4,6 +4,19 @@
 <dict>
 	<key>CFBundleDisplayName</key>
 	<string>AkFit</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLName</key>
+			<string>ai.talktoem.AkFit.auth</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>akfit</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>AkFit uses the camera to scan food barcodes so you can log nutrition quickly and accurately.</string>
 	<key>NSHealthShareUsageDescription</key>

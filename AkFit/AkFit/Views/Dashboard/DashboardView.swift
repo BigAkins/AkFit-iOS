@@ -630,6 +630,7 @@ private struct NoteEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var text: String = ""
+    @State private var isSaving = false
     @FocusState private var isEditorFocused: Bool
 
     var body: some View {
@@ -642,17 +643,18 @@ private struct NoteEditorSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") {
-                            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                            Task {
-                                await noteStore.save(content: trimmed, userId: userId)
-                                dismiss()
+                        if isSaving {
+                            ProgressView()
+                        } else {
+                            Button("Done") {
+                                save()
                             }
+                            .fontWeight(.semibold)
                         }
-                        .fontWeight(.semibold)
                     }
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Cancel") { dismiss() }
+                            .disabled(isSaving)
                     }
                 }
         }
@@ -664,6 +666,17 @@ private struct NoteEditorSheet: View {
             // otherwise the keyboard can collide with the transition.
             try? await Task.sleep(for: .milliseconds(400))
             isEditorFocused = true
+        }
+    }
+
+    private func save() {
+        guard !isSaving else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            await noteStore.save(content: trimmed, userId: userId)
+            dismiss()
         }
     }
 }

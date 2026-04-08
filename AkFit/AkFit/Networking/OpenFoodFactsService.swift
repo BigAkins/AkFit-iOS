@@ -129,9 +129,9 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
     /// `GET /api/v2/product/{barcode}` — single product by barcode.
     /// Returns `nil` when OFF reports `status: 0` (product not in database).
     private func fetchProduct(barcode: String) async throws -> OFFProduct? {
-        var components = URLComponents(
+        guard var components = URLComponents(
             string: "https://world.openfoodfacts.org/api/v2/product/\(barcode)"
-        )!
+        ) else { return nil }
         components.queryItems = [URLQueryItem(name: "fields", value: Self.fields)]
         guard let url = components.url else { return nil }
 
@@ -144,9 +144,9 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
 
     /// `GET /cgi/search.pl` — keyword search returning up to 20 products.
     private func fetchSearch(query: String) async throws -> [OFFProduct] {
-        var components = URLComponents(
+        guard var components = URLComponents(
             string: "https://world.openfoodfacts.org/cgi/search.pl"
-        )!
+        ) else { return [] }
         components.queryItems = [
             URLQueryItem(name: "action",       value: "process"),
             URLQueryItem(name: "search_terms", value: query),
@@ -312,18 +312,19 @@ struct OpenFoodFactsService: FoodSearchService, BarcodeLookupService {
 
         // Round metric values with 3+ decimal places: "354.881999mL" → "355mL"
         // Keeps values with 1–2 decimal places intact ("12.5g" stays).
-        let regex = try! NSRegularExpression(
+        if let regex = try? NSRegularExpression(
             pattern: #"(\d+\.\d{3,})\s*(m[lL]|g|kg|oz)"#
-        )
-        let ns = s as NSString
-        if let match = regex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)),
-           let numRange = Range(match.range(at: 1), in: s),
-           let unitRange = Range(match.range(at: 2), in: s),
-           let fullRange = Range(match.range, in: s),
-           let value = Double(s[numRange])
-        {
-            let rounded = Int(value.rounded())
-            s.replaceSubrange(fullRange, with: "\(rounded)\(s[unitRange])")
+        ) {
+            let ns = s as NSString
+            if let match = regex.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)),
+               let numRange = Range(match.range(at: 1), in: s),
+               let unitRange = Range(match.range(at: 2), in: s),
+               let fullRange = Range(match.range, in: s),
+               let value = Double(s[numRange])
+            {
+                let rounded = Int(value.rounded())
+                s.replaceSubrange(fullRange, with: "\(rounded)\(s[unitRange])")
+            }
         }
 
         // Truncate overly long labels to keep rows compact.

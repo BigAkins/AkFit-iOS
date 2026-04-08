@@ -370,12 +370,19 @@ struct AuthView: View {
                 errorMessage = "Sign in with Apple failed. Please try again."
                 return
             }
+            // Capture Apple-provided name/email before the async Supabase call
+            // so OnboardingView can skip the name step (App Store requirement).
+            authManager.setPendingAppleCredentials(
+                fullName: credential.fullName,
+                email: credential.email
+            )
             Task {
                 defer { isSubmitting = false }
                 do {
                     try await authManager.signInWithApple(idToken: idToken, rawNonce: nonce)
                     // authStateChanges fires → RootView re-routes automatically.
                 } catch {
+                    authManager.clearPendingAppleCredentials()
                     errorMessage = friendlyError(error)
                 }
             }
@@ -393,7 +400,7 @@ struct AuthView: View {
     // MARK: - Sign in with Google
 
     /// Triggers the Google OAuth flow via Supabase's built-in `ASWebAuthenticationSession`
-    /// integration. No browser switch or custom URL scheme registration required.
+    /// integration. The app must register the `akfit` callback URL scheme in Info.plist.
     ///
     /// On success, `authStateChanges` fires and `RootView` re-routes automatically.
     /// Cancellation (user dismisses the sheet) is silently ignored.
@@ -425,10 +432,16 @@ struct AuthView: View {
     /// to Supabase's `signInWithIdToken`, which re-hashes and verifies it — preventing
     /// token replay attacks.
     private static func randomNonceString(length: Int = 32) -> String {
-        precondition(length > 0)
+        guard length > 0 else { return "" }
         var bytes = [UInt8](repeating: 0, count: length)
         let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-        precondition(status == errSecSuccess, "SecRandomCopyBytes failed with OSStatus \(status)")
+        if status != errSecSuccess {
+            // Fall back to Swift's system RNG so a transient entropy failure
+            // doesn't crash the auth screen.
+            for index in bytes.indices {
+                bytes[index] = UInt8.random(in: .min ... .max)
+            }
+        }
         let charset = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
         return String(bytes.map { charset[Int($0) % charset.count] })
     }

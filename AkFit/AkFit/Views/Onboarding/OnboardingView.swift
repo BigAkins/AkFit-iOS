@@ -34,6 +34,13 @@ struct OnboardingView: View {
         }
         .background(Color(UIColor.systemBackground))
         .animation(.easeInOut(duration: 0.25), value: step)
+        .onAppear {
+            // Apple sign-in: pre-fill display name and skip the name step.
+            if let appleName = authManager.pendingAppleDisplayName {
+                if data.displayName.isEmpty { data.displayName = appleName }
+                if step == .name { step = .sex }
+            }
+        }
     }
 
     // MARK: - Progress bar
@@ -77,7 +84,12 @@ struct OnboardingView: View {
     // MARK: - Step list (dynamic: pace omitted for maintenance)
 
     private var visibleSteps: [Step] {
-        var steps: [Step] = [.name, .sex, .bodyStats, .goal, .activity]
+        var steps: [Step] = []
+        // Skip name step when Apple sign-in already provided a display name.
+        if authManager.pendingAppleDisplayName == nil {
+            steps.append(.name)
+        }
+        steps.append(contentsOf: [.sex, .bodyStats, .goal, .activity])
         if data.goalType != .maintenance { steps.append(.pace) }
         steps.append(.results)
         return steps
