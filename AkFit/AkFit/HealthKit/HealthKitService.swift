@@ -38,9 +38,9 @@ final class HealthKitService {
     /// `checkAuthorization()` is called.
     private(set) var authStatus: AuthStatus = .notDetermined
 
-    /// `false` in the Simulator where HealthKit is unavailable.
+    /// `false` in the Simulator where HealthKit authorization is not safe to present.
     /// Note: HealthKit IS available on iPad since iPadOS 17.
-    var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
+    var isAvailable: Bool { !Self.isSimulator && HKHealthStore.isHealthDataAvailable() }
 
     /// `true` while `requestAuthorization()` is in flight. Prevents concurrent
     /// calls — multiple authorization requests can crash `HKHealthStore` on
@@ -56,18 +56,45 @@ final class HealthKitService {
     /// infrastructure property with observation hooks (it has no observable surface).
     @ObservationIgnored private lazy var store = HKHealthStore()
 
-    /// All sample and correlation types AkFit writes to Health.
-    private var writeTypes: Set<HKSampleType> {
+    /// All writable sample types AkFit requests authorization to save.
+    ///
+    /// Important: `HKCorrelationType(.food)` is intentionally excluded here.
+    /// HealthKit rejects authorization requests that try to share `.food`,
+    /// which causes `_throwIfAuthorizationDisallowedForSharing:types:` to abort
+    /// the request before the system sheet can complete.
+    private var shareTypes: Set<HKSampleType> {
         var types = Set<HKSampleType>()
         types.insert(HKQuantityType(.bodyMass))
         types.insert(HKQuantityType(.dietaryEnergyConsumed))
         types.insert(HKQuantityType(.dietaryProtein))
         types.insert(HKQuantityType(.dietaryCarbohydrates))
         types.insert(HKQuantityType(.dietaryFatTotal))
-        if let food = HKCorrelationType.correlationType(forIdentifier: .food) {
-            types.insert(food)
-        }
         return types
+    }
+
+    /// AkFit doesn't read any Health data; authorization is write-only.
+    private var readTypes: Set<HKObjectType> { [] }
+
+    private static var isSimulator: Bool {
+#if targetEnvironment(simulator)
+        true
+#else
+        false
+#endif
+    }
+
+    private var shareTypeIdentifiers: String {
+        shareTypes
+            .map(\.identifier)
+            .sorted()
+            .joined(separator: ", ")
+    }
+
+    private var readTypeIdentifiers: String {
+        readTypes
+            .map(\.identifier)
+            .sorted()
+            .joined(separator: ", ")
     }
 
     // MARK: - Authorization
@@ -81,6 +108,9 @@ final class HealthKitService {
     /// Re-entrancy guard prevents concurrent calls — multiple in-flight
     /// authorization requests can crash `HKHealthStore` on iPadOS 26.
     func requestAuthorization() async {
+        hkLogger.info(
+            "requestAuthorization called — simulator: \(Self.isSimulator, privacy: .public), healthDataAvailable: \(HKHealthStore.isHealthDataAvailable(), privacy: .public)"
+        )
         guard isAvailable else {
             hkLogger.info("requestAuthorization skipped — HealthKit unavailable")
             return
@@ -92,12 +122,17 @@ final class HealthKitService {
         isRequesting = true
         defer { isRequesting = false }
         do {
+            hkLogger.info("requestAuthorization share types — [\(self.shareTypeIdentifiers, privacy: .public)]")
+            hkLogger.info("requestAuthorization read types — [\(self.readTypeIdentifiers, privacy: .public)]")
             hkLogger.info("requestAuthorization — presenting system sheet")
-            try await store.requestAuthorization(toShare: writeTypes, read: [])
+            try await store.requestAuthorization(toShare: shareTypes, read: readTypes)
             refreshStatus()
             hkLogger.info("requestAuthorization succeeded — status: \(String(describing: self.authStatus))")
         } catch {
-            hkLogger.error("requestAuthorization failed — \(error.localizedDescription)")
+            let nsError = error as NSError
+            hkLogger.error(
+                "requestAuthorization failed — domain: \(nsError.domain, privacy: .public) code: \(nsError.code, privacy: .public) message: \(error.localizedDescription, privacy: .public)"
+            )
             // Authorization failures are non-fatal; export calls will no-op.
             // Do NOT call refreshStatus() here — if the authorization call itself
             // failed, the store may be in a bad state and querying it could crash.
@@ -111,6 +146,9 @@ final class HealthKitService {
     /// Call this when `SettingsView` appears so the displayed status reflects any
     /// changes the user made via iPhone Settings → Privacy → Health.
     func checkAuthorization() {
+        hkLogger.info(
+            "checkAuthorization called — simulator: \(Self.isSimulator, privacy: .public), healthDataAvailable: \(HKHealthStore.isHealthDataAvailable(), privacy: .public)"
+        )
         guard isAvailable else {
             hkLogger.info("checkAuthorization skipped — HealthKit unavailable")
             return
