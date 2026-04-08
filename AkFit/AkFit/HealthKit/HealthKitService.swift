@@ -1,5 +1,11 @@
 import Foundation
 import HealthKit
+import OSLog
+
+private let hkLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "AkFit",
+    category: "HealthKit"
+)
 
 /// One-way export bridge from AkFit to Apple Health.
 ///
@@ -32,8 +38,14 @@ final class HealthKitService {
     /// `checkAuthorization()` is called.
     private(set) var authStatus: AuthStatus = .notDetermined
 
-    /// `false` on iPad and in the Simulator where HealthKit is unavailable.
+    /// `false` in the Simulator where HealthKit is unavailable.
+    /// Note: HealthKit IS available on iPad since iPadOS 17.
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
+
+    /// `true` while `requestAuthorization()` is in flight. Prevents concurrent
+    /// calls — multiple authorization requests can crash `HKHealthStore` on
+    /// iPadOS 26.
+    private(set) var isRequesting: Bool = false
 
     // MARK: - Private
 
@@ -65,16 +77,32 @@ final class HealthKitService {
     /// Presents the system authorization sheet the first time it's called.
     /// On subsequent calls (or after the user has already decided) HealthKit
     /// re-checks silently — no sheet is shown again. Safe to call multiple times.
+    ///
+    /// Re-entrancy guard prevents concurrent calls — multiple in-flight
+    /// authorization requests can crash `HKHealthStore` on iPadOS 26.
     func requestAuthorization() async {
-        guard isAvailable else { return }
+        guard isAvailable else {
+            hkLogger.info("requestAuthorization skipped — HealthKit unavailable")
+            return
+        }
+        guard !isRequesting else {
+            hkLogger.info("requestAuthorization skipped — already in progress")
+            return
+        }
+        isRequesting = true
+        defer { isRequesting = false }
         do {
+            hkLogger.info("requestAuthorization — presenting system sheet")
             try await store.requestAuthorization(toShare: writeTypes, read: [])
             refreshStatus()
+            hkLogger.info("requestAuthorization succeeded — status: \(String(describing: self.authStatus))")
         } catch {
+            hkLogger.error("requestAuthorization failed — \(error.localizedDescription)")
             // Authorization failures are non-fatal; export calls will no-op.
             // Do NOT call refreshStatus() here — if the authorization call itself
             // failed, the store may be in a bad state and querying it could crash.
-            authStatus = .denied
+            // Preserve the prior status so transient presentation / environment
+            // failures do not strand the UI in a fake "denied" state.
         }
     }
 
@@ -83,7 +111,10 @@ final class HealthKitService {
     /// Call this when `SettingsView` appears so the displayed status reflects any
     /// changes the user made via iPhone Settings → Privacy → Health.
     func checkAuthorization() {
-        guard isAvailable else { return }
+        guard isAvailable else {
+            hkLogger.info("checkAuthorization skipped — HealthKit unavailable")
+            return
+        }
         refreshStatus()
     }
 

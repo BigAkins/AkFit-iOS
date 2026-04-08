@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import Supabase
 
@@ -34,6 +35,12 @@ final class AuthManager {
     /// Cleared on successful fetch or sign-out.
     /// `RootView` shows a retry screen instead of `OnboardingView` when this is set.
     private(set) var dataFetchFailed: Bool = false
+
+    /// Display name captured from Apple's `ASAuthorizationAppleIDCredential`.
+    /// Set before the Supabase sign-in call; consumed by `OnboardingView` to
+    /// skip the name step (App Store requirement: don't re-ask for Apple-provided info).
+    /// `nil` when no usable name was provided or after sign-out.
+    private(set) var pendingAppleDisplayName: String?
 
     // MARK: - Session (authenticated path only)
 
@@ -164,11 +171,12 @@ final class AuthManager {
             // Only change state if we were authenticated. Guest mode is not
             // affected by Supabase sign-out events (guests have no session).
             if userState == .authenticated {
-                self.session         = nil
-                self._serverProfile  = nil
-                self._serverGoal     = nil
-                self.dataFetchFailed = false
-                self.userState       = .signedOut
+                self.session                 = nil
+                self._serverProfile          = nil
+                self._serverGoal             = nil
+                self.dataFetchFailed         = false
+                self.pendingAppleDisplayName = nil
+                self.userState               = .signedOut
             }
 
         default:
@@ -255,6 +263,7 @@ final class AuthManager {
 
     /// Enters guest mode. Activates `GuestDataStore` and updates routing state.
     func enterGuestMode() {
+        pendingAppleDisplayName = nil
         guestStore.activate()
         userState = .guest
     }
@@ -268,9 +277,29 @@ final class AuthManager {
         userState = .signedOut
     }
 
+    /// Clears any Apple-only onboarding state after the user switches to a
+    /// different auth path or the Apple flow fails.
+    func clearPendingAppleCredentials() {
+        pendingAppleDisplayName = nil
+    }
+
+    /// Clears all authenticated-session state without relying on the auth
+    /// observer. Used as a last-resort fallback when sign-out can't complete.
+    private func clearAuthenticatedState() {
+        session                 = nil
+        _serverProfile          = nil
+        _serverGoal             = nil
+        dataFetchFailed         = false
+        pendingAppleDisplayName = nil
+        if userState != .guest {
+            userState = .signedOut
+        }
+    }
+
     // MARK: - Auth actions (authenticated path)
 
     func signUp(email: String, password: String) async throws -> Bool {
+        pendingAppleDisplayName = nil
         let response = try await SupabaseClientProvider.shared.auth.signUp(
             email: email,
             password: password
@@ -279,6 +308,7 @@ final class AuthManager {
     }
 
     func signIn(email: String, password: String) async throws {
+        pendingAppleDisplayName = nil
         try await SupabaseClientProvider.shared.auth.signIn(
             email: email,
             password: password
@@ -286,7 +316,13 @@ final class AuthManager {
     }
 
     func signOut() async throws {
-        try await SupabaseClientProvider.shared.auth.signOut()
+        do {
+            try await SupabaseClientProvider.shared.auth.signOut()
+        } catch {
+            // Signing out should never trap the user in a broken authenticated
+            // state. Clear the local session even if the remote revoke fails.
+            clearAuthenticatedState()
+        }
     }
 
     func sendPasswordReset(email: String) async throws {
@@ -337,11 +373,7 @@ final class AuthManager {
             // Local signOut failed (invalid JWT, network issue) and the auth
             // observer may not fire. Force-clear session state so the user
             // isn't stuck in an authenticated state with a deleted account.
-            self.session         = nil
-            self._serverProfile  = nil
-            self._serverGoal     = nil
-            self.dataFetchFailed = false
-            self.userState       = .signedOut
+            clearAuthenticatedState()
         }
     }
 
@@ -355,11 +387,37 @@ final class AuthManager {
         )
     }
 
+    /// Google OAuth callback URL. Defined as a static constant so the
+    /// force-unwrap is validated once at app startup, not at call time.
+    private static let googleRedirectURL = URL(string: "akfit://auth-callback")!
+
     func signInWithGoogle() async throws {
+        pendingAppleDisplayName = nil
         try await SupabaseClientProvider.shared.auth.signInWithOAuth(
             provider: .google,
-            redirectTo: URL(string: "akfit://auth-callback")!
+            redirectTo: Self.googleRedirectURL
         )
+    }
+
+    // MARK: - Apple credential capture
+
+    /// Extracts a usable display name from the Apple credential fields.
+    /// Called from `AuthView` before the Supabase sign-in so the name is
+    /// available when `OnboardingView` mounts.
+    func setPendingAppleCredentials(fullName: PersonNameComponents?, email: String?) {
+        // Build "First Last" from Apple-provided name components.
+        let parts = [fullName?.givenName, fullName?.familyName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let joined = parts.joined(separator: " ")
+
+        if !joined.isEmpty {
+            pendingAppleDisplayName = joined
+        } else if let email, let prefix = email.split(separator: "@").first, !prefix.isEmpty {
+            pendingAppleDisplayName = String(prefix)
+        } else {
+            pendingAppleDisplayName = nil
+        }
     }
 
     // MARK: - Post-onboarding updates
@@ -368,6 +426,7 @@ final class AuthManager {
     /// have been persisted. Routes to `MainTabView` without an extra network
     /// round-trip. Handles both guest and authenticated paths.
     func markOnboarded(goal: UserGoal, profile: UserProfile) {
+        pendingAppleDisplayName = nil
         if userState == .guest {
             guestStore.saveGoal(goal)
             guestStore.saveProfile(profile)
