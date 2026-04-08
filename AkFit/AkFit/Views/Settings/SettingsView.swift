@@ -42,9 +42,7 @@ struct SettingsView: View {
                     targetsSection
                 }
                 remindersSection
-                if healthKit.isAvailable {
-                    healthSection
-                }
+                healthSection
                 exitOrSignOutSection
             }
             .onAppear {
@@ -376,6 +374,12 @@ struct SettingsView: View {
                     Image(systemName: "checkmark")
                         .foregroundStyle(.green)
                         .font(.footnote.weight(.semibold))
+                } else if !healthKit.isAvailable {
+                    Button("Unavailable") { }
+                        .font(.subheadline)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(true)
                 } else if healthKit.authStatus == .notDetermined {
                     Button {
                         Task { await healthKit.requestAuthorization() }
@@ -401,6 +405,9 @@ struct SettingsView: View {
     }
 
     private var healthStatusCaption: String {
+        if !healthKit.isAvailable {
+            return "Apple Health isn't available on this device"
+        }
         switch healthKit.authStatus {
         case .authorized:    return "Exporting food logs and weight to Health"
         case .denied:        return "Enable in Settings → Privacy & Security → Health"

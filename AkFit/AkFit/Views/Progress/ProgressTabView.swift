@@ -231,7 +231,8 @@ struct ProgressTabView: View {
 
     /// Maps a tap location in the chart overlay to the nearest day in the current range.
     private func selectDay(at location: CGPoint, proxy: ChartProxy, geo: GeometryProxy) {
-        let plotOrigin = geo[proxy.plotAreaFrame].origin
+        guard let plotFrame = proxy.plotFrame else { return }
+        let plotOrigin = geo[plotFrame].origin
         let plotX = location.x - plotOrigin.x
         guard plotX >= 0, let tappedDate: Date = proxy.value(atX: plotX) else { return }
         let tappedDay = Calendar.current.startOfDay(for: tappedDate)
