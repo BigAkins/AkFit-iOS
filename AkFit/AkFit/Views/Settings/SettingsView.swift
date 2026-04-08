@@ -12,6 +12,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
     @Environment(FoodLogStore.self)        private var logStore
+    @Environment(FavoriteFoodStore.self)   private var favStore
     @Environment(BodyweightStore.self)     private var weightStore
     @Environment(DailyNoteStore.self)      private var noteStore
     @Environment(GroceryListStore.self)    private var groceryStore
@@ -387,14 +388,17 @@ struct SettingsView: View {
                         if healthKit.isRequesting {
                             ProgressView()
                                 .controlSize(.small)
+                                .tint(Color(UIColor.systemBackground))
                         } else {
                             Text("Connect")
+                                .foregroundStyle(Color(UIColor.systemBackground))
                         }
                     }
                     .font(.subheadline)
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
                     .tint(.primary)
+                    .foregroundStyle(Color(UIColor.systemBackground))
                     .disabled(healthKit.isRequesting)
                 }
             }
@@ -548,6 +552,7 @@ struct SettingsView: View {
             defer { isDeletingAccount = false }
             do {
                 try await authManager.deleteAccount()
+                clearUserOwnedState()
                 // AuthManager signs out locally → authStateChanges fires .signedOut
                 // → RootView re-routes to AuthView automatically.
             } catch {
@@ -568,6 +573,14 @@ struct SettingsView: View {
         groceryStore.reset()
         authManager.exitGuestMode()
         // AuthManager sets userState = .signedOut → RootView re-routes to AuthView.
+    }
+
+    private func clearUserOwnedState() {
+        logStore.reset()
+        favStore.reset()
+        weightStore.reset()
+        noteStore.reset()
+        groceryStore.reset()
     }
 }
 

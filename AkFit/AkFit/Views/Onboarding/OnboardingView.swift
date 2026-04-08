@@ -583,15 +583,11 @@ private struct ResultsStepView: View {
     private func save() {
         guard
             let out    = output,
-            let input  = data.calculatorInput,
-            let userId = authManager.currentUserId
+            let input  = data.calculatorInput
         else {
             onboardingLogger.error(
                 "save() guard failed — output:\(output != nil) input:\(data.calculatorInput != nil) userId:\(authManager.currentUserId != nil)"
             )
-            if authManager.currentUserId == nil {
-                errorMessage = "Session expired. Please sign out and sign back in."
-            }
             return
         }
 
@@ -608,6 +604,12 @@ private struct ResultsStepView: View {
 
             // Guest path: build objects locally, no Supabase calls.
             if authManager.isGuest {
+                guard let userId = authManager.currentUserId else {
+                    onboardingLogger.error("save() guest path missing currentUserId")
+                    errorMessage = "Session expired. Please sign out and sign back in."
+                    return
+                }
+
                 let now = Date()
                 let profile = UserProfile(
                     id:            userId,
@@ -639,6 +641,10 @@ private struct ResultsStepView: View {
 
             // Authenticated path: persist to Supabase.
             do {
+                let userId = try await authManager.requireAuthenticatedUserIDForWrite()
+                debugOnboardingSave(
+                    "saving targets for user \(userId.uuidString) goal=\(input.goalType.rawValue) activity=\(input.activityLevel.rawValue)"
+                )
                 let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName, birthdate: birthdate)
                 let goal    = try await insertGoal(userId: userId, input: input, out: out)
                 authManager.markOnboarded(goal: goal, profile: profile)
@@ -646,7 +652,12 @@ private struct ResultsStepView: View {
                 onboardingLogger.error(
                     "save() failed — \(String(describing: error), privacy: .public)"
                 )
-                errorMessage = "Couldn't save your targets. Please try again."
+                debugOnboardingSave("save failed: \(describeOnboardingSaveError(error))")
+                if error is AuthError {
+                    errorMessage = "Session expired. Please sign out and sign back in."
+                } else {
+                    errorMessage = "Couldn't save your targets. Please try again."
+                }
             }
         }
     }
@@ -677,13 +688,18 @@ private struct ResultsStepView: View {
             activity_level: input.activityLevel.rawValue,
             updated_at:     Date()
         )
-        return try await SupabaseClientProvider.shared
+        debugOnboardingSave(
+            "profiles upsert payload id=\(userId.uuidString) height_cm=\(row.height_cm) weight_kg=\(row.weight_kg) sex=\(row.sex) activity_level=\(row.activity_level)"
+        )
+        let profile: UserProfile = try await SupabaseClientProvider.shared
             .from("profiles")
             .upsert(row, onConflict: "id")
             .select()
             .single()
             .execute()
             .value
+        debugOnboardingSave("profiles upsert succeeded for user \(userId.uuidString)")
+        return profile
     }
 
     private func insertGoal(
@@ -694,7 +710,7 @@ private struct ResultsStepView: View {
         struct GoalInsert: Encodable {
             let user_id:        UUID
             let goal_type:      String
-            let target_pace:    String
+            let target_pace:    String?
             let daily_calories: Int
             let daily_protein:  Int
             let daily_carbs:    Int
@@ -703,19 +719,38 @@ private struct ResultsStepView: View {
         let row = GoalInsert(
             user_id:        userId,
             goal_type:      input.goalType.rawValue,
-            target_pace:    input.pace.rawValue,
+            target_pace:    input.goalType == .maintenance ? nil : input.pace.rawValue,
             daily_calories: out.calories,
             daily_protein:  out.proteinG,
             daily_carbs:    out.carbsG,
             daily_fat:      out.fatG
         )
-        return try await SupabaseClientProvider.shared
+        debugOnboardingSave(
+            "goals insert payload user_id=\(userId.uuidString) goal_type=\(row.goal_type) target_pace=\(row.target_pace ?? "nil") calories=\(row.daily_calories)"
+        )
+        let goal: UserGoal = try await SupabaseClientProvider.shared
             .from("goals")
             .insert(row)
             .select()
             .single()
             .execute()
             .value
+        debugOnboardingSave("goals insert succeeded with id \(goal.id.uuidString)")
+        return goal
+    }
+
+    private func debugOnboardingSave(_ message: String) {
+        #if DEBUG
+        print("[OnboardingSave] \(message)")
+        #endif
+    }
+
+    private func describeOnboardingSaveError(_ error: Error) -> String {
+        if let postgrestError = error as? PostgrestError {
+            return "postgrest code=\(postgrestError.code ?? "nil") message=\(postgrestError.message) detail=\(postgrestError.detail ?? "nil") hint=\(postgrestError.hint ?? "nil")"
+        }
+
+        return String(describing: error)
     }
 }
 

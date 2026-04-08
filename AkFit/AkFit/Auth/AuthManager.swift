@@ -329,6 +329,37 @@ final class AuthManager {
         try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
     }
 
+    /// Resolves a valid authenticated session before any write to RLS-protected
+    /// tables. `currentUserId` alone is not sufficient because the initial
+    /// auth event can surface an expired session before token refresh completes.
+    func requireAuthenticatedUserIDForWrite() async throws -> UUID {
+        guard userState == .authenticated else {
+            debugAuthWrite("write requested while userState=\(String(describing: userState))")
+            throw AuthError.sessionMissing
+        }
+
+        var lastError: Error?
+
+        for attempt in 1...2 {
+            do {
+                let validSession = try await SupabaseClientProvider.shared.auth.session
+                session = validSession
+                debugAuthWrite(
+                    "resolved write-ready session for user \(validSession.user.id.uuidString), attempt=\(attempt), expired=\(validSession.isExpired)"
+                )
+                return validSession.user.id
+            } catch {
+                lastError = error
+                debugAuthWrite("failed to resolve write-ready session on attempt \(attempt): \(error)")
+                if attempt == 1 {
+                    try? await Task.sleep(for: .milliseconds(350))
+                }
+            }
+        }
+
+        throw lastError ?? AuthError.sessionMissing
+    }
+
     // MARK: - Account deletion (authenticated path)
 
     /// Permanently deletes the authenticated user's account and all associated
@@ -340,8 +371,10 @@ final class AuthManager {
     /// (food_logs, bodyweight_logs, user_goals/goals, profiles, favorite_foods,
     /// daily_notes, grocery_items).
     ///
-    /// The Supabase client automatically attaches the current access token to
-    /// the Authorization header — the service-role key never touches this app.
+    /// The edge function must receive the current session JWT in the
+    /// Authorization header. `supabase-swift` initialises the Functions client
+    /// with the anon key as its default bearer token, so this call passes the
+    /// session JWT explicitly per request.
     ///
     /// After a successful deletion `auth.signOut()` is called locally. The
     /// `authStateChanges` stream fires `.signedOut`, `userState` becomes
@@ -356,20 +389,36 @@ final class AuthManager {
         guard session != nil else {
             throw DeleteAccountError.notAuthenticated
         }
+
+        let validSession = try await resolveDeleteAccountSession()
+
         do {
-            // The Supabase client attaches the active session token automatically.
-            // The @discardableResult Data response is not needed here.
+            debugDeleteAccount(
+                "invoking delete-account with session JWT \(maskedToken(validSession.accessToken))"
+            )
             try await SupabaseClientProvider.shared.functions
-                .invoke("delete-account")
+                .invoke(
+                    "delete-account",
+                    options: FunctionInvokeOptions(
+                        headers: [
+                            "Authorization": "Bearer \(validSession.accessToken)"
+                        ]
+                    )
+                )
         } catch {
+            debugDeleteAccount("edge function invocation failed: \(describeDeleteAccountError(error))")
             throw DeleteAccountError.serverError
         }
+
+        debugDeleteAccount("edge function deletion succeeded")
+
         // Sign out locally. The JWT is now invalid (user deleted on server),
         // so signOut may return an error. The authStateChanges stream normally
         // fires .signedOut and RootView re-routes automatically.
         do {
             try await SupabaseClientProvider.shared.auth.signOut()
         } catch {
+            debugDeleteAccount("local signOut failed after deletion: \(error)")
             // Local signOut failed (invalid JWT, network issue) and the auth
             // observer may not fire. Force-clear session state so the user
             // isn't stuck in an authenticated state with a deleted account.
@@ -452,6 +501,122 @@ final class AuthManager {
         } else {
             _serverProfile = profile
         }
+    }
+
+    private func describeDeleteAccountError(_ error: Error) -> String {
+        if let functionError = error as? FunctionsError {
+            switch functionError {
+            case .relayError:
+                return "relay error"
+            case let .httpError(code, data):
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                return "http \(code), body: \(body)"
+            }
+        }
+
+        return String(describing: error)
+    }
+
+    private func resolveDeleteAccountSession() async throws -> Session {
+        let auth = SupabaseClientProvider.shared.auth
+        let functionURL = AppConfig.supabaseURL
+            .appendingPathComponent("functions")
+            .appendingPathComponent("v1")
+            .appendingPathComponent("delete-account")
+
+        debugDeleteAccount("app Supabase URL \(AppConfig.supabaseURL.absoluteString)")
+        debugDeleteAccount("delete-account function URL \(functionURL.absoluteString)")
+
+        var validSession: Session
+        do {
+            validSession = try await auth.session
+            session = validSession
+            debugDeleteAccount(
+                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+            )
+        } catch {
+            debugDeleteAccount("failed to resolve valid session before deletion: \(describeDeleteAccountAuthError(error))")
+            throw DeleteAccountError.notAuthenticated
+        }
+
+        do {
+            _ = try await auth.user(jwt: validSession.accessToken)
+            debugDeleteAccount("validated session JWT against current Supabase project")
+        } catch {
+            debugDeleteAccount("session JWT validation failed: \(describeDeleteAccountAuthError(error))")
+
+            guard isInvalidJWTError(error) else {
+                throw DeleteAccountError.serverError
+            }
+
+            do {
+                debugDeleteAccount("attempting session refresh after invalid JWT")
+                validSession = try await auth.refreshSession(refreshToken: validSession.refreshToken)
+                session = validSession
+                debugDeleteAccount(
+                    "refreshed session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                )
+                _ = try await auth.user(jwt: validSession.accessToken)
+                debugDeleteAccount("validated refreshed session JWT against current Supabase project")
+            } catch {
+                debugDeleteAccount("session refresh/revalidation failed: \(describeDeleteAccountAuthError(error))")
+                try? await auth.signOut(scope: .local)
+                clearAuthenticatedState()
+                throw DeleteAccountError.notAuthenticated
+            }
+        }
+
+        SupabaseClientProvider.shared.functions.setAuth(token: validSession.accessToken)
+        return validSession
+    }
+
+    private func describeDeleteAccountAuthError(_ error: Error) -> String {
+        if let authError = error as? AuthError {
+            switch authError {
+            case let .api(message, errorCode, underlyingData, underlyingResponse):
+                let body = String(data: underlyingData, encoding: .utf8) ?? "<non-utf8 body>"
+                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue), message: \(message), body: \(body)"
+            case let .jwtVerificationFailed(message):
+                return "jwt verification failed: \(message)"
+            default:
+                return authError.localizedDescription
+            }
+        }
+
+        return String(describing: error)
+    }
+
+    private func isInvalidJWTError(_ error: Error) -> Bool {
+        if let authError = error as? AuthError {
+            switch authError {
+            case .jwtVerificationFailed:
+                return true
+            case let .api(_, errorCode, _, _):
+                return errorCode == .invalidJWT || errorCode == .badJWT
+            default:
+                return false
+            }
+        }
+
+        let description = String(describing: error).lowercased()
+        return description.contains("invalid jwt") || description.contains("bad jwt")
+    }
+
+    private func debugDeleteAccount(_ message: String) {
+        #if DEBUG
+        print("[DeleteAccount] \(message)")
+        #endif
+    }
+
+    private func maskedToken(_ token: String) -> String {
+        let suffix = String(token.suffix(8))
+        return "<len:\(token.count) suffix:\(suffix)>"
+    }
+
+    private func debugAuthWrite(_ message: String) {
+        #if DEBUG
+        print("[AuthWrite] \(message)")
+        #endif
     }
 }
 

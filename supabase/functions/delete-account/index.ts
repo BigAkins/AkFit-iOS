@@ -25,16 +25,19 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
+const responseHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type',
+  'Content-Type': 'application/json',
+}
+
 Deno.serve(async (req: Request) => {
+  const debug = Deno.env.get('AKFIT_FUNCTION_DEBUG') === '1'
+
   // CORS preflight — included for completeness; iOS clients don't require it.
   if (req.method === 'OPTIONS') {
-    return new Response('ok', {
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Headers':
-          'authorization, x-client-info, apikey, content-type',
-      },
-    })
+    return new Response('ok', { headers: responseHeaders })
   }
 
   if (req.method !== 'POST') {
@@ -45,14 +48,32 @@ Deno.serve(async (req: Request) => {
 
   const authHeader = req.headers.get('Authorization')
   if (!authHeader) {
+    console.error('delete-account: missing Authorization header')
     return jsonResponse({ error: 'Missing Authorization header' }, 401)
+  }
+
+  const supabaseURL = Deno.env.get('SUPABASE_URL') ?? ''
+  const anonKey = Deno.env.get('SUPABASE_ANON_KEY') ?? ''
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+
+  if (!supabaseURL || !anonKey || !serviceRoleKey) {
+    console.error(
+      `delete-account: missing env config url=${Boolean(supabaseURL)} anon=${Boolean(anonKey)} service=${Boolean(serviceRoleKey)}`
+    )
+    return jsonResponse({ error: 'Account deletion failed. Please try again.' }, 500)
+  }
+
+  if (debug) {
+    console.log(
+      `delete-account: request received, authHeaderPresent=${Boolean(authHeader)}`
+    )
   }
 
   // Resolve the JWT to a Supabase user using the anon-key client.
   // This is the canonical pattern for authenticating Edge Function callers.
   const supabaseClient = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+    supabaseURL,
+    anonKey,
     { global: { headers: { Authorization: authHeader } } }
   )
   const {
@@ -61,14 +82,21 @@ Deno.serve(async (req: Request) => {
   } = await supabaseClient.auth.getUser()
 
   if (authError || !user) {
+    console.error(
+      `delete-account: auth.getUser failed: ${authError?.message ?? 'missing user'}`
+    )
     return jsonResponse({ error: 'Unauthorized' }, 401)
+  }
+
+  if (debug) {
+    console.log(`delete-account: authenticated user ${user.id}`)
   }
 
   // ── 2. Delete the user via the admin (service-role) client ────────────────
 
   const adminClient = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    supabaseURL,
+    serviceRoleKey
   )
 
   const { error: deleteError } = await adminClient.auth.admin.deleteUser(user.id)
@@ -94,6 +122,6 @@ Deno.serve(async (req: Request) => {
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: responseHeaders,
   })
 }

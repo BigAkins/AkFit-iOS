@@ -66,6 +66,12 @@ final class FavoriteFoodStore {
         }
     }
 
+    // MARK: - Reset
+
+    func reset() {
+        favorites = []
+    }
+
     // MARK: - Toggle
 
     /// Adds `food` to favorites if it is not already saved; removes it if it is.
