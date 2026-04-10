@@ -36,9 +36,13 @@ Config.local.xcconfig
 CLAUDE.md
 .claude/
 .vscode/
+.codex/
+.agents/
 AGENTS.md
 docs/ui-reference/
 docs/supabase-reference/
+
+
 # Local app config overrides
 LocalConfig.swift
 SupabaseConfig.local.swift
