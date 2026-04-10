@@ -159,18 +159,20 @@ docs/ui-reference/
 ├── 03_secondary/
 ├── 04_components/
 ├── 05_notes/
+├── 06_future-features/
 └── 99_archive/
 ```
 
 ### What it means
 
 - `00_index.md` → main UI reference guide
-- `01_flows/` → grouped screenshots by flow
-- `02_primary/` → strongest references
-- `03_secondary/` → supporting references
+- `01_flows/` → grouped screenshots by product flow
+- `02_primary/` → strongest references for current AkFit implementation
+- `03_secondary/` → supporting references for current AkFit implementation
 - `04_components/` → reusable UI pattern inspiration
 - `05_notes/` → product and UI notes
-- `99_archive/` → low-priority references
+- `06_future-features/` → references for later concepts such as gamification, pet companion ideas, streak systems, motivation loops, and experimental premium features
+- `99_archive/` → low-priority references intentionally kept out of active decision-making
 
 ---
 
@@ -191,6 +193,25 @@ Persistent project rules live in:
 ```text
 CLAUDE.md
 ```
+
+---
+
+## UI reference usage rules
+
+The UI reference system exists to support implementation without destabilizing the current app.
+
+Rules:
+
+1. The current AkFit codebase and shipped UI are the source of truth.
+2. Screenshot references are for visual guidance, not automatic feature requirements.
+3. Current implementation work should primarily use:
+   - `01_flows/`
+   - `02_primary/`
+   - `03_secondary/`
+   - `04_components/`
+4. `06_future-features/` should be used only for later-feature planning or explicitly requested future work.
+5. Reference image source folders may live outside the AkFit repo before being organized into `docs/ui-reference/`.
+6. External reference apps should influence layout and interaction quality, not product drift or feature bloat.
 
 ---
 
@@ -293,4 +314,5 @@ It is **daily adherence through clarity, speed, and accuracy**.
 ## License
 
 Private / proprietary for now.
+
 # AkFit-iOS
