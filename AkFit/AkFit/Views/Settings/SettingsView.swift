@@ -355,18 +355,13 @@ struct SettingsView: View {
     private var healthSection: some View {
         Section {
             HStack(spacing: 12) {
-                // Heart icon — filled and red when connected, outline otherwise.
-                Image(systemName: healthKit.authStatus == .authorized ? "heart.fill" : "heart")
-                    .foregroundStyle(healthKit.authStatus == .authorized ? .red : Color(.secondaryLabel))
+                // Apple Health icon — always filled, with an adaptive accent tint.
+                Image(systemName: "heart.fill")
+                    .foregroundStyle(Color("AppleHealthAccent"))
                     .frame(width: 24)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Apple Health")
-                        .foregroundStyle(.primary)
-                    Text(healthStatusCaption)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text("Apple Health")
+                    .foregroundStyle(.primary)
 
                 Spacer()
 
@@ -390,7 +385,7 @@ struct SettingsView: View {
                                 .controlSize(.small)
                                 .tint(Color(UIColor.systemBackground))
                         } else {
-                            Text("Connect")
+                            Text("Continue")
                                 .foregroundStyle(Color(UIColor.systemBackground))
                         }
                     }
@@ -405,17 +400,6 @@ struct SettingsView: View {
             .padding(.vertical, 2)
         } header: {
             Text("Health")
-        }
-    }
-
-    private var healthStatusCaption: String {
-        if !healthKit.isAvailable {
-            return "Apple Health isn't available on this device"
-        }
-        switch healthKit.authStatus {
-        case .authorized:    return "Exporting food logs and weight to Health"
-        case .denied:        return "Enable in Settings → Privacy & Security → Health"
-        case .notDetermined: return "Export food logs and weight to Apple Health"
         }
     }
 
