@@ -59,4 +59,4 @@ fastlane/test_output
 
 # Logs
 *.log
-.gstack/
+skills-lock.json
