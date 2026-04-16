@@ -41,6 +41,7 @@ CLAUDE.md
 AGENTS.md
 docs/ui-reference/
 docs/supabase-reference/
+.planning/
 
 
 # Local app config overrides
