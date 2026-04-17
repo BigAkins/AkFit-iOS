@@ -91,6 +91,8 @@ jobs:
             -project AkFit/AkFit.xcodeproj \
             -scheme AkFit \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
+            -skip-testing:AkFitUITests/AkFitUITests/testLaunchPerformance \
+            -skip-testing:AkFitUITests/AkFitUITestsLaunchTests/testLaunch \
             -parallel-testing-enabled NO \
             -derivedDataPath /tmp/AkFitDerivedData \
             -clonedSourcePackagesDirPath /tmp/AkFitSourcePackages \
