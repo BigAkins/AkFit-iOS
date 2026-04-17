@@ -645,8 +645,31 @@ private struct ResultsStepView: View {
                 debugOnboardingSave(
                     "saving targets for user \(userId.uuidString) goal=\(input.goalType.rawValue) activity=\(input.activityLevel.rawValue)"
                 )
-                let profile = try await upsertProfile(userId: userId, input: input, displayName: displayName, birthdate: birthdate)
-                let goal    = try await insertGoal(userId: userId, input: input, out: out)
+
+                // ── Profile upsert ────────────────────────────────────────
+                debugOnboardingSave(
+                    "profiles upsert payload id=\(userId.uuidString) height_cm=\(Int(input.heightCm.rounded())) weight_kg=\(Int(input.weightKg.rounded())) sex=\(input.sex.rawValue) activity_level=\(input.activityLevel.rawValue)"
+                )
+                let profile = try await ProfileService.upsert(
+                    userId: userId,
+                    input: input,
+                    displayName: displayName,
+                    birthdate: birthdate
+                )
+                debugOnboardingSave("profiles upsert succeeded for user \(userId.uuidString)")
+
+                // ── Goal insert ──────────────────────────────────────────
+                let paceForLog = input.goalType == .maintenance ? "nil" : input.pace.rawValue
+                debugOnboardingSave(
+                    "goals insert payload user_id=\(userId.uuidString) goal_type=\(input.goalType.rawValue) target_pace=\(paceForLog) calories=\(out.calories)"
+                )
+                let goal = try await GoalService.insert(
+                    userId: userId,
+                    input: input,
+                    out: out
+                )
+                debugOnboardingSave("goals insert succeeded with id \(goal.id.uuidString)")
+
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
                 onboardingLogger.error(
@@ -660,83 +683,6 @@ private struct ResultsStepView: View {
                 }
             }
         }
-    }
-
-    private func upsertProfile(
-        userId:      UUID,
-        input:       MacroCalculator.Input,
-        displayName: String?,
-        birthdate:   String
-    ) async throws -> UserProfile {
-        struct ProfileInsert: Encodable {
-            let id:             UUID
-            let display_name:   String?
-            let height_cm:      Int
-            let weight_kg:      Int
-            let birthdate:      String
-            let sex:            String
-            let activity_level: String
-            let updated_at:     Date
-        }
-        let row = ProfileInsert(
-            id:             userId,
-            display_name:   displayName,
-            height_cm:      Int(input.heightCm.rounded()),
-            weight_kg:      Int(input.weightKg.rounded()),
-            birthdate:      birthdate,
-            sex:            input.sex.rawValue,
-            activity_level: input.activityLevel.rawValue,
-            updated_at:     Date()
-        )
-        debugOnboardingSave(
-            "profiles upsert payload id=\(userId.uuidString) height_cm=\(row.height_cm) weight_kg=\(row.weight_kg) sex=\(row.sex) activity_level=\(row.activity_level)"
-        )
-        let profile: UserProfile = try await SupabaseClientProvider.shared
-            .from("profiles")
-            .upsert(row, onConflict: "id")
-            .select()
-            .single()
-            .execute()
-            .value
-        debugOnboardingSave("profiles upsert succeeded for user \(userId.uuidString)")
-        return profile
-    }
-
-    private func insertGoal(
-        userId: UUID,
-        input: MacroCalculator.Input,
-        out: MacroCalculator.Output
-    ) async throws -> UserGoal {
-        struct GoalInsert: Encodable {
-            let user_id:        UUID
-            let goal_type:      String
-            let target_pace:    String?
-            let daily_calories: Int
-            let daily_protein:  Int
-            let daily_carbs:    Int
-            let daily_fat:      Int
-        }
-        let row = GoalInsert(
-            user_id:        userId,
-            goal_type:      input.goalType.rawValue,
-            target_pace:    input.goalType == .maintenance ? nil : input.pace.rawValue,
-            daily_calories: out.calories,
-            daily_protein:  out.proteinG,
-            daily_carbs:    out.carbsG,
-            daily_fat:      out.fatG
-        )
-        debugOnboardingSave(
-            "goals insert payload user_id=\(userId.uuidString) goal_type=\(row.goal_type) target_pace=\(row.target_pace ?? "nil") calories=\(row.daily_calories)"
-        )
-        let goal: UserGoal = try await SupabaseClientProvider.shared
-            .from("goals")
-            .insert(row)
-            .select()
-            .single()
-            .execute()
-            .value
-        debugOnboardingSave("goals insert succeeded with id \(goal.id.uuidString)")
-        return goal
     }
 
     private func debugOnboardingSave(_ message: String) {

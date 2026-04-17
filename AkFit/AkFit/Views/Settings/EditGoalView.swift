@@ -1,5 +1,4 @@
 import SwiftUI
-import Supabase
 
 /// Sheet for editing the user's goal type, activity level, pace, and the
 /// resulting calorie and macro targets.
@@ -200,9 +199,11 @@ struct EditGoalView: View {
             // Authenticated path: persist to Supabase.
             do {
                 // Patch goal row with new goal type, pace, and recalculated targets.
-                let updatedGoal = try await patchGoal(userId: userId, input: input, out: out)
+                let updatedGoal = try await GoalService.update(
+                    userId: userId, goalId: goal.id, input: input, out: out
+                )
                 // Patch profiles.activity_level so EditProfileView stays in sync.
-                let updatedProfile = try await patchActivityLevel(
+                let updatedProfile = try await ProfileService.patchActivityLevel(
                     userId: userId, activityLevel: input.activityLevel
                 )
                 authManager.updateGoal(updatedGoal)
@@ -212,79 +213,6 @@ struct EditGoalView: View {
                 saveError = "Couldn't save changes. Please try again."
             }
         }
-    }
-
-    /// PATCHes the user's active goal row in `goals` with new goal parameters
-    /// and recalculated daily targets.
-    private func patchGoal(
-        userId: UUID,
-        input:  MacroCalculator.Input,
-        out:    MacroCalculator.Output
-    ) async throws -> UserGoal {
-        let payload = GoalUpdate(
-            goalType:      input.goalType.rawValue,
-            targetPace:    input.pace.rawValue,
-            dailyCalories: out.calories,
-            dailyProtein:  out.proteinG,
-            dailyCarbs:    out.carbsG,
-            dailyFat:      out.fatG,
-            updatedAt:     Date()
-        )
-        return try await SupabaseClientProvider.shared
-            .from("goals")
-            .update(payload)
-            .eq("id",      value: goal.id.uuidString)
-            .eq("user_id", value: userId.uuidString)
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-
-    /// PATCHes `profiles.activity_level` so the value is in sync the next
-    /// time `EditProfileView` is opened or macro targets are recalculated.
-    ///
-    /// Body stats (weight, height, birthdate, sex) are not touched — they
-    /// are only edited in `EditProfileView`.
-    private func patchActivityLevel(
-        userId:        UUID,
-        activityLevel: UserGoal.ActivityLevel
-    ) async throws -> UserProfile {
-        struct ActivityPatch: Encodable {
-            let activity_level: String
-            let updated_at:     Date
-        }
-        return try await SupabaseClientProvider.shared
-            .from("profiles")
-            .update(ActivityPatch(activity_level: activityLevel.rawValue, updated_at: Date()))
-            .eq("id", value: userId.uuidString)
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-}
-
-// MARK: - Goal update payload
-
-/// Encodable payload for PATCHing a `goals` row.
-private struct GoalUpdate: Encodable {
-    let goalType:      String
-    let targetPace:    String
-    let dailyCalories: Int
-    let dailyProtein:  Int
-    let dailyCarbs:    Int
-    let dailyFat:      Int
-    let updatedAt:     Date
-
-    enum CodingKeys: String, CodingKey {
-        case goalType      = "goal_type"
-        case targetPace    = "target_pace"
-        case dailyCalories = "daily_calories"
-        case dailyProtein  = "daily_protein"
-        case dailyCarbs    = "daily_carbs"
-        case dailyFat      = "daily_fat"
-        case updatedAt     = "updated_at"
     }
 }
 

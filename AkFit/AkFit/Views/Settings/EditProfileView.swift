@@ -1,5 +1,4 @@
 import SwiftUI
-import Supabase
 
 /// Sheet for editing the user's body stats: display name, height, weight,
 /// full birthdate, sex, and activity level.
@@ -246,10 +245,12 @@ struct EditProfileView: View {
 
             // Authenticated path: persist to Supabase.
             do {
-                let updatedProfile = try await upsertProfile(
+                let updatedProfile = try await ProfileService.upsert(
                     userId: userId, input: input, displayName: displayName, birthdate: birthdate
                 )
-                let updatedGoal = try await patchGoal(userId: userId, input: input, out: out)
+                let updatedGoal = try await GoalService.patchTargets(
+                    userId: userId, goalId: goal.id, out: out
+                )
                 authManager.updateProfile(updatedProfile)
                 authManager.updateGoal(updatedGoal)
                 dismiss()
@@ -257,74 +258,6 @@ struct EditProfileView: View {
                 saveError = "Couldn't save changes. Please try again."
             }
         }
-    }
-
-    /// Upserts the `profiles` row with updated display name, body stats,
-    /// full birthdate, sex, and activity level.
-    private func upsertProfile(
-        userId:      UUID,
-        input:       MacroCalculator.Input,
-        displayName: String?,
-        birthdate:   String
-    ) async throws -> UserProfile {
-        struct ProfileUpsert: Encodable {
-            let id:             UUID
-            let display_name:   String?
-            let height_cm:      Int
-            let weight_kg:      Int
-            let birthdate:      String
-            let sex:            String
-            let activity_level: String
-            let updated_at:     Date
-        }
-        let row = ProfileUpsert(
-            id:             userId,
-            display_name:   displayName,
-            height_cm:      Int(input.heightCm.rounded()),
-            weight_kg:      Int(input.weightKg.rounded()),
-            birthdate:      birthdate,
-            sex:            input.sex.rawValue,
-            activity_level: input.activityLevel.rawValue,
-            updated_at:     Date()
-        )
-        return try await SupabaseClientProvider.shared
-            .from("profiles")
-            .upsert(row, onConflict: "id")
-            .select()
-            .single()
-            .execute()
-            .value
-    }
-
-    /// PATCHes the `goals` row with recalculated daily targets.
-    private func patchGoal(
-        userId: UUID,
-        input:  MacroCalculator.Input,
-        out:    MacroCalculator.Output
-    ) async throws -> UserGoal {
-        struct GoalPatch: Encodable {
-            let daily_calories: Int
-            let daily_protein:  Int
-            let daily_carbs:    Int
-            let daily_fat:      Int
-            let updated_at:     Date
-        }
-        let payload = GoalPatch(
-            daily_calories: out.calories,
-            daily_protein:  out.proteinG,
-            daily_carbs:    out.carbsG,
-            daily_fat:      out.fatG,
-            updated_at:     Date()
-        )
-        return try await SupabaseClientProvider.shared
-            .from("goals")
-            .update(payload)
-            .eq("id",      value: goal.id.uuidString)
-            .eq("user_id", value: userId.uuidString)
-            .select()
-            .single()
-            .execute()
-            .value
     }
 }
 
