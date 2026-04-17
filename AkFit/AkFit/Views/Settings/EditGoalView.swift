@@ -1,4 +1,5 @@
 import SwiftUI
+import Supabase
 
 /// Sheet for editing the user's goal type, activity level, pace, and the
 /// resulting calorie and macro targets.
@@ -196,21 +197,26 @@ struct EditGoalView: View {
                 return
             }
 
-            // Authenticated path: persist to Supabase.
+            // Authenticated path: validate the session first, then persist.
             do {
+                let writeUserId = try await authManager.requireAuthenticatedUserIDForWrite()
                 // Patch goal row with new goal type, pace, and recalculated targets.
                 let updatedGoal = try await GoalService.update(
-                    userId: userId, goalId: goal.id, input: input, out: out
+                    userId: writeUserId, goalId: goal.id, input: input, out: out
                 )
                 // Patch profiles.activity_level so EditProfileView stays in sync.
                 let updatedProfile = try await ProfileService.patchActivityLevel(
-                    userId: userId, activityLevel: input.activityLevel
+                    userId: writeUserId, activityLevel: input.activityLevel
                 )
                 authManager.updateGoal(updatedGoal)
                 authManager.updateProfile(updatedProfile)
                 dismiss()
             } catch {
-                saveError = "Couldn't save changes. Please try again."
+                if error is AuthError {
+                    saveError = "Session expired. Please sign out and sign back in."
+                } else {
+                    saveError = "Couldn't save changes. Please try again."
+                }
             }
         }
     }

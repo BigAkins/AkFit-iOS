@@ -28,24 +28,29 @@ final class BodyweightStore {
     /// callers use the latest entry for each calendar day when rendering charts.
     private(set) var weekLogs: [BodyweightLog] = []
 
-    // MARK: - Guest data store
+    // MARK: - Dependencies
 
     private let guestStore: GuestDataStore?
+    private let authManager: AuthManager?
 
     private var isGuest: Bool { guestStore?.isActive == true }
 
     // MARK: - Init
 
-    /// Production initializer. Pass the shared `GuestDataStore` from `AkFitApp`.
+    /// Production initializer. Pass the shared `GuestDataStore` and
+    /// `AuthManager` from `AkFitApp` so authenticated writes can pre-flight
+    /// their session via `AuthManager.requireAuthenticatedUserIDForWrite()`.
     ///
-    /// Also used as the preview initializer: omit `guestStore` and pass
-    /// `previewLogs` to populate state without a network call.
+    /// Also used as the preview initializer: omit both and pass `previewLogs`
+    /// to populate state without a network call.
     init(
         guestStore:   GuestDataStore?    = nil,
+        authManager:  AuthManager?       = nil,
         previewLogs:  [BodyweightLog]    = []
     ) {
-        self.guestStore = guestStore
-        self.weekLogs   = previewLogs
+        self.guestStore  = guestStore
+        self.authManager = authManager
+        self.weekLogs    = previewLogs
     }
 
     // MARK: - Reset (called when exiting guest mode)
@@ -111,9 +116,11 @@ final class BodyweightStore {
             return
         }
 
-        // Authenticated path: persist to Supabase, update in-memory from confirmed row.
+        // Authenticated path: validate the session (refreshing once if needed)
+        // before issuing the write, then persist to Supabase.
+        let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
         let payload = BodyweightLogInsert(
-            userId:   userId,
+            userId:   validUserId,
             weightKg: weightKg,
             loggedAt: now
         )
@@ -139,7 +146,9 @@ final class BodyweightStore {
             return
         }
 
-        // Authenticated path: Supabase delete.
+        // Authenticated path: validate the session before issuing the delete.
+        // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
+        _ = try await authManager?.requireAuthenticatedUserIDForWrite()
         try await SupabaseClientProvider.shared
             .from("bodyweight_logs")
             .delete()

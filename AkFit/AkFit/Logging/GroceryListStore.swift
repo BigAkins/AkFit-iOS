@@ -28,15 +28,23 @@ final class GroceryListStore {
     private(set) var items:     [GroceryItem] = []
     private(set) var isLoading: Bool          = false
 
-    // MARK: - Guest store
+    // MARK: - Dependencies
 
     private let guestStore: GuestDataStore?
+    private let authManager: AuthManager?
     private var isGuest: Bool { guestStore?.isActive == true }
 
     // MARK: - Init
 
-    init(guestStore: GuestDataStore? = nil) {
-        self.guestStore = guestStore
+    /// Production initializer. Pass the shared `GuestDataStore` and
+    /// `AuthManager` from `AkFitApp` so authenticated writes can pre-flight
+    /// their session via `AuthManager.requireAuthenticatedUserIDForWrite()`.
+    init(
+        guestStore: GuestDataStore? = nil,
+        authManager: AuthManager?   = nil
+    ) {
+        self.guestStore  = guestStore
+        self.authManager = authManager
     }
 
     // MARK: - Fetch
@@ -94,11 +102,13 @@ final class GroceryListStore {
             return
         }
 
-        // Authenticated path: insert to Supabase, append confirmed row.
+        // Authenticated path: validate the session, then insert to Supabase
+        // and append the confirmed row.
         do {
+            let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
             let payload = GroceryItemInsert(
                 id:        UUID(),
-                userId:    userId,
+                userId:    validUserId,
                 name:      trimmed,
                 isChecked: false,
                 sortOrder: nextOrder
@@ -132,8 +142,9 @@ final class GroceryListStore {
             return
         }
 
-        // Authenticated path: partial update.
+        // Authenticated path: validate the session, then partial update.
         do {
+            _ = try await authManager?.requireAuthenticatedUserIDForWrite()
             try await SupabaseClientProvider.shared
                 .from("grocery_items")
                 .update(GroceryCheckUpdate(isChecked: newChecked))
@@ -159,8 +170,10 @@ final class GroceryListStore {
             return
         }
 
-        // Authenticated path: Supabase delete.
+        // Authenticated path: validate the session, then Supabase delete.
+        // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
         do {
+            _ = try await authManager?.requireAuthenticatedUserIDForWrite()
             try await SupabaseClientProvider.shared
                 .from("grocery_items")
                 .delete()
@@ -186,12 +199,14 @@ final class GroceryListStore {
             return
         }
 
-        // Authenticated path: delete all checked rows for this user.
+        // Authenticated path: validate the session, then delete all checked
+        // rows for this user.
         do {
+            let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
             try await SupabaseClientProvider.shared
                 .from("grocery_items")
                 .delete()
-                .eq("user_id", value: userId.uuidString)
+                .eq("user_id", value: validUserId.uuidString)
                 .eq("is_checked", value: true)
                 .execute()
         } catch {

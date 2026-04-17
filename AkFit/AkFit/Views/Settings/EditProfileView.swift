@@ -1,4 +1,5 @@
 import SwiftUI
+import Supabase
 
 /// Sheet for editing the user's body stats: display name, height, weight,
 /// full birthdate, sex, and activity level.
@@ -243,19 +244,24 @@ struct EditProfileView: View {
                 return
             }
 
-            // Authenticated path: persist to Supabase.
+            // Authenticated path: validate the session first, then persist.
             do {
+                let writeUserId = try await authManager.requireAuthenticatedUserIDForWrite()
                 let updatedProfile = try await ProfileService.upsert(
-                    userId: userId, input: input, displayName: displayName, birthdate: birthdate
+                    userId: writeUserId, input: input, displayName: displayName, birthdate: birthdate
                 )
                 let updatedGoal = try await GoalService.patchTargets(
-                    userId: userId, goalId: goal.id, out: out
+                    userId: writeUserId, goalId: goal.id, out: out
                 )
                 authManager.updateProfile(updatedProfile)
                 authManager.updateGoal(updatedGoal)
                 dismiss()
             } catch {
-                saveError = "Couldn't save changes. Please try again."
+                if error is AuthError {
+                    saveError = "Session expired. Please sign out and sign back in."
+                } else {
+                    saveError = "Couldn't save changes. Please try again."
+                }
             }
         }
     }
