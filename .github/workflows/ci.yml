@@ -17,53 +17,91 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Select iPhone simulator destination
+      - name: Print Xcode and simulator diagnostics
+        run: |
+          xcodebuild -version
+          echo
+          xcodebuild -list -project AkFit/AkFit.xcodeproj
+          echo
+          xcrun simctl list devices available
+          echo
+          xcodebuild -showdestinations -project AkFit/AkFit.xcodeproj -scheme AkFit
+
+      - name: Select simulator destination
         id: simulator
         shell: bash
         run: |
           set -euo pipefail
 
-          destinations="$(xcodebuild -showdestinations -project AkFit/AkFit.xcodeproj -scheme AkFit 2>/dev/null)"
-          destination="$(printf '%s\n' "$destinations" | awk '
-            /platform:iOS Simulator/ && /name:iPhone/ && /OS:/ {
-              name = ""
-              os = ""
+          python3 <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import subprocess
+          import sys
 
-              if (match($0, /name:[^,}]*/)) {
-                name = substr($0, RSTART + 5, RLENGTH - 5)
-                gsub(/^ +| +$/, "", name)
-              }
+          output = subprocess.check_output(
+              ["xcrun", "simctl", "list", "devices", "available", "-j"],
+              text=True,
+          )
+          devices = json.loads(output).get("devices", {})
 
-              if (match($0, /OS:[^,}]*/)) {
-                os = substr($0, RSTART + 3, RLENGTH - 3)
-                gsub(/^ +| +$/, "", os)
-              }
+          candidates = []
+          for runtime, entries in devices.items():
+              if "iOS" not in runtime:
+                  continue
 
-              if (name != "" && os != "") {
-                print "platform=iOS Simulator,name=" name ",OS=" os
-                exit
-              }
-            }
-          ')"
+              try:
+                  version = tuple(int(part) for part in runtime.rsplit("iOS-", 1)[1].split("-"))
+              except (IndexError, ValueError):
+                  version = (0,)
 
-          if [ -z "$destination" ]; then
-            printf '%s\n' "$destinations"
-            echo "Unable to find an iPhone simulator destination for the AkFit scheme." >&2
-            exit 1
-          fi
+              for device in entries:
+                  name = device.get("name", "")
+                  udid = device.get("udid")
+                  if not udid or not name.startswith("iPhone"):
+                      continue
+                  candidates.append((version, name, udid, runtime))
 
-          echo "destination=$destination" >> "$GITHUB_OUTPUT"
+          if not candidates:
+              sys.exit("No available iPhone simulator was found on the runner.")
+
+          candidates.sort(reverse=True)
+          version, name, udid, runtime = candidates[0]
+
+          print(f"udid={udid}")
+          print(f"name={name}")
+          print(f"runtime={runtime}")
+          PY
+
+      - name: Boot simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun simctl boot "${{ steps.simulator.outputs.udid }}" || true
+          xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b
+          xcrun simctl list devices "${{ steps.simulator.outputs.udid }}"
 
       - name: Run Xcode sanity pass
+        shell: bash
         run: |
-          xcodebuild test \
+          set -euo pipefail
+
+          log_path=/tmp/akfit-ios-sanity.log
+
+          if ! xcodebuild test \
             -project AkFit/AkFit.xcodeproj \
             -scheme AkFit \
-            -destination "${{ steps.simulator.outputs.destination }}" \
+            -destination "id=${{ steps.simulator.outputs.udid }}" \
             -parallel-testing-enabled NO \
             -derivedDataPath /tmp/AkFitDerivedData \
             -clonedSourcePackagesDirPath /tmp/AkFitSourcePackages \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$log_path"; then
+            echo
+            echo "xcodebuild failed for simulator ${{ steps.simulator.outputs.name }} (${{ steps.simulator.outputs.runtime }})"
+            echo "Last 200 lines of $log_path:"
+            tail -n 200 "$log_path"
+            exit 1
+          fi
 
   supabase-integrity:
     name: Supabase migration and RLS integrity
@@ -75,7 +113,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Supabase CLI
-        uses: supabase/setup-cli@v2
+        uses: supabase/setup-cli@b60b5899c73b63a2d2d651b1e90db8d4c9392f51
         with:
           version: 2.90.0
 
