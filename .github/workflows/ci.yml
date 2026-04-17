@@ -72,16 +72,21 @@ jobs:
           print(f"runtime={runtime}")
           PY
 
-      - name: Run Xcode build-for-testing sanity pass
+      - name: Run AkFit PR-safe test plan
         shell: bash
         run: |
           set -euo pipefail
 
           log_path=/tmp/akfit-ios-sanity.log
 
-          if ! xcodebuild build-for-testing \
+          # The `AkFit` test plan (AkFit.xcodeproj/xcshareddata/xctestplans/AkFit.xctestplan)
+          # includes only the AkFitTests target. AkFitUITests (launch/perf) is
+          # still compiled by the shared scheme's BuildAction so it doesn't
+          # silently rot, but its tests are not executed in the PR gate.
+          if ! xcodebuild test \
             -project AkFit/AkFit.xcodeproj \
             -scheme AkFit \
+            -testPlan AkFit \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
             -derivedDataPath /tmp/AkFitDerivedData \
             -clonedSourcePackagesDirPath /tmp/AkFitSourcePackages \
