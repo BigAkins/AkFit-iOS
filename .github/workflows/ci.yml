@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios-sanity:
+    name: iOS build/test sanity
+    runs-on: macos-15
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select iPhone simulator destination
+        id: simulator
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          destinations="$(xcodebuild -showdestinations -project AkFit/AkFit.xcodeproj -scheme AkFit 2>/dev/null)"
+          destination="$(printf '%s\n' "$destinations" | awk '
+            /platform:iOS Simulator/ && /name:iPhone/ && /OS:/ {
+              name = ""
+              os = ""
+
+              if (match($0, /name:[^,}]*/)) {
+                name = substr($0, RSTART + 5, RLENGTH - 5)
+                gsub(/^ +| +$/, "", name)
+              }
+
+              if (match($0, /OS:[^,}]*/)) {
+                os = substr($0, RSTART + 3, RLENGTH - 3)
+                gsub(/^ +| +$/, "", os)
+              }
+
+              if (name != "" && os != "") {
+                print "platform=iOS Simulator,name=" name ",OS=" os
+                exit
+              }
+            }
+          ')"
+
+          if [ -z "$destination" ]; then
+            printf '%s\n' "$destinations"
+            echo "Unable to find an iPhone simulator destination for the AkFit scheme." >&2
+            exit 1
+          fi
+
+          echo "destination=$destination" >> "$GITHUB_OUTPUT"
+
+      - name: Run Xcode sanity pass
+        run: |
+          xcodebuild test \
+            -project AkFit/AkFit.xcodeproj \
+            -scheme AkFit \
+            -destination "${{ steps.simulator.outputs.destination }}" \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/AkFitDerivedData \
+            -clonedSourcePackagesDirPath /tmp/AkFitSourcePackages \
+            CODE_SIGNING_ALLOWED=NO
+
+  supabase-integrity:
+    name: Supabase migration and RLS integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@v2
+        with:
+          version: 2.90.0
+
+      - name: Start local database services
+        run: supabase db start
+
+      - name: Rebuild database from migrations and seeds
+        run: supabase db reset --local --yes
+
+      - name: Lint resulting schema
+        run: supabase db lint
+
+      - name: Run database regression checks
+        run: supabase test db
