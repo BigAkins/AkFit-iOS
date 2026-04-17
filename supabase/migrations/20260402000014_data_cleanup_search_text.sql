@@ -1,87 +1,22 @@
 -- =============================================================================
 -- Migration: 20260402000014_data_cleanup_search_text
--- Purpose:   Data quality cleanup + search_text column for better partial
---            matching on branded names with hyphens and apostrophes.
+-- Purpose:   Adds the normalized `search_text` column, auto-populate trigger,
+--            and trigram GIN index on generic_foods. Enables punctuation-
+--            tolerant search: "chick fil a" matches "Chick-fil-A",
+--            "mcdonalds" matches "McDonald's", etc.
 --
--- Changes:
---   1. Remove exact and near-duplicate rows across migration waves
---   2. Fix incorrect serving weight for Grapes
---   3. Normalize "Grapes, red or green" → "Grapes"
---   4. Add search_text column (normalized food_name) with auto-populate
---      trigger and trigram GIN index
+-- The original version of this migration also performed data-only cleanup
+-- on seeded rows (removing duplicates, renaming "Grapes, red or green" →
+-- "Grapes", fixing a bad serving weight). Those statements moved to
+-- supabase/seeds/food/026_data_cleanup.sql so migrations stay schema-only.
 --
--- Rationale:
---   The current search uses ilike('%query%') on food_name. This fails when
---   users type "chick fil a" (no hyphens) or "mcdonalds" (no apostrophe)
---   because "Chick-fil-A" and "McDonald's" contain punctuation the user
---   omits. search_text stores a cleaned version: apostrophes removed,
---   hyphens replaced with spaces, lowercased. Searching against search_text
---   with a similarly-normalized query resolves these mismatches.
+-- Replay behavior:
+--   * Fresh `supabase db reset`: seeds run AFTER migrations, so the
+--     populate-existing-rows UPDATE below is a no-op on an empty table.
+--     The trigger populates search_text on every subsequent seed insert.
+--   * Databases where this migration already ran in its pre-split form:
+--     effective row state is identical.
 -- =============================================================================
-
-
--- ═══════════════════════════════════════════════════════════════════════════════
--- PART 1: Duplicate cleanup
--- ═══════════════════════════════════════════════════════════════════════════════
-
--- 1a. Remove exact-duplicate rows (same food_name + serving_label),
---     keeping only the earliest-created entry per pair.
---     Catches: Banana (seed ↔ produce), Blueberries (seed ↔ produce).
-DELETE FROM public.generic_foods
-WHERE id IN (
-    SELECT id FROM (
-        SELECT id,
-               ROW_NUMBER() OVER (
-                   PARTITION BY food_name, serving_label
-                   ORDER BY created_at ASC
-               ) AS rn
-        FROM public.generic_foods
-    ) dupes
-    WHERE rn > 1
-);
-
--- 1b. Remove near-duplicate produce entries that shadow simpler names
---     from earlier seed/expand migrations.
-
--- "Apple, raw" (produce) duplicates "Apple" (seed) at the same 1 medium (182g)
--- serving. Keep "Apple" (simpler, matches natural search) and "Apple Slices"
--- (distinct serving from produce).
-DELETE FROM public.generic_foods WHERE food_name = 'Apple, raw';
-
--- "Orange, raw" (produce) duplicates "Orange" (seed). Keep "Orange" and the
--- useful "Orange Slices" from produce.
-DELETE FROM public.generic_foods WHERE food_name = 'Orange, raw';
-
--- Seed "Strawberries" labeled "1 cup (152g)" with 11g carbs is less accurate
--- and less descriptive than the produce version "1 cup halves (152g)" with 12g
--- carbs (USDA: 11.67g → rounds to 12). Remove the seed version.
-DELETE FROM public.generic_foods
-WHERE food_name = 'Strawberries' AND serving_label = '1 cup (152g)';
-
--- "Pineapple Chunks" (produce) duplicates "Pineapple" (expand) at the same
--- 1 cup / 165g serving. Keep the simpler name.
-DELETE FROM public.generic_foods WHERE food_name = 'Pineapple Chunks';
-
--- Produce "Avocado" at 1/2 medium (68g) duplicates the seed version at
--- ½ medium (75g). Keep the seed version (established, used in suggestions).
-DELETE FROM public.generic_foods
-WHERE food_name = 'Avocado' AND serving_label = '1/2 medium (68g)';
-
-
--- ═══════════════════════════════════════════════════════════════════════════════
--- PART 2: Data fixes
--- ═══════════════════════════════════════════════════════════════════════════════
-
--- Expand migration has "Grapes" with serving "1 cup (92g)" — incorrect weight.
--- USDA: 1 cup seedless grapes = 151g. The produce migration has the correct
--- entry as "Grapes, red or green" at 151g. Remove the bad 92g entry and
--- normalize the produce name to "Grapes" for simpler searching.
-DELETE FROM public.generic_foods
-WHERE food_name = 'Grapes' AND serving_label = '1 cup (92g)';
-
-UPDATE public.generic_foods
-SET food_name = 'Grapes'
-WHERE food_name = 'Grapes, red or green';
 
 
 -- ═══════════════════════════════════════════════════════════════════════════════
