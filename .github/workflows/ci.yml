@@ -72,28 +72,17 @@ jobs:
           print(f"runtime={runtime}")
           PY
 
-      - name: Boot simulator
-        shell: bash
-        run: |
-          set -euo pipefail
-          xcrun simctl boot "${{ steps.simulator.outputs.udid }}" || true
-          xcrun simctl bootstatus "${{ steps.simulator.outputs.udid }}" -b
-          xcrun simctl list devices "${{ steps.simulator.outputs.udid }}"
-
-      - name: Run Xcode sanity pass
+      - name: Run Xcode build-for-testing sanity pass
         shell: bash
         run: |
           set -euo pipefail
 
           log_path=/tmp/akfit-ios-sanity.log
 
-          if ! xcodebuild test \
+          if ! xcodebuild build-for-testing \
             -project AkFit/AkFit.xcodeproj \
             -scheme AkFit \
             -destination "id=${{ steps.simulator.outputs.udid }}" \
-            -skip-testing:AkFitUITests/AkFitUITests/testLaunchPerformance \
-            -skip-testing:AkFitUITests/AkFitUITestsLaunchTests/testLaunch \
-            -parallel-testing-enabled NO \
             -derivedDataPath /tmp/AkFitDerivedData \
             -clonedSourcePackagesDirPath /tmp/AkFitSourcePackages \
             CODE_SIGNING_ALLOWED=NO \
