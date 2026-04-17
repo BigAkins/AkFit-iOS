@@ -26,13 +26,25 @@ final class FavoriteFoodStore {
     /// Updated optimistically after each `toggle` call.
     private(set) var favorites: [FavoriteFood] = []
 
+    // MARK: - Dependencies
+
+    private let authManager: AuthManager?
+
     // MARK: - Init
 
-    /// Default initializer — starts with empty state.
-    /// Also used as the preview initializer: pass `previewFavorites` to seed
-    /// state in `#Preview` blocks without a network call.
-    init(previewFavorites: [FavoriteFood] = []) {
-        self.favorites = previewFavorites
+    /// Production initializer. Pass the shared `AuthManager` from `AkFitApp`
+    /// so `toggle` can pre-flight the session via
+    /// `AuthManager.requireAuthenticatedUserIDForWrite()` before the write.
+    ///
+    /// Also used as the preview initializer: omit `authManager` and pass
+    /// `previewFavorites` to seed state in `#Preview` blocks without a
+    /// network call.
+    init(
+        authManager:      AuthManager?     = nil,
+        previewFavorites: [FavoriteFood]   = []
+    ) {
+        self.authManager = authManager
+        self.favorites   = previewFavorites
     }
 
     // MARK: - Query
@@ -86,6 +98,8 @@ final class FavoriteFoodStore {
             // Optimistic remove
             favorites.removeAll { $0.id == existing.id }
             do {
+                // Validate the session before the delete; RLS scopes it to the owner.
+                _ = try await authManager?.requireAuthenticatedUserIDForWrite()
                 try await SupabaseClientProvider.shared
                     .from("favorite_foods")
                     .delete()
@@ -113,8 +127,10 @@ final class FavoriteFoodStore {
             )
             favorites.insert(placeholder, at: 0)
             do {
+                // Validate the session (refreshing once if needed) before the insert.
+                let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
                 let payload = FavoriteFoodInsert(
-                    userId:          userId,
+                    userId:          validUserId,
                     foodName:        food.name,
                     servingLabel:    food.servingSize,
                     servingWeightG:  food.servingWeightG,

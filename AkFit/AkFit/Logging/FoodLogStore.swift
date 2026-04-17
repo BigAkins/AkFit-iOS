@@ -30,25 +30,30 @@ final class FoodLogStore {
     private(set) var refreshFailed:  Bool      = false
     private(set) var lastLoggedEntry: FoodLog? = nil
 
-    // MARK: - Guest data store
+    // MARK: - Dependencies
 
     private let guestStore: GuestDataStore?
+    private let authManager: AuthManager?
 
     private var isGuest: Bool { guestStore?.isActive == true }
 
     // MARK: - Init
 
-    /// Production initializer. Pass the shared `GuestDataStore` from `AkFitApp`.
+    /// Production initializer. Pass the shared `GuestDataStore` and
+    /// `AuthManager` from `AkFitApp` so authenticated writes can pre-flight
+    /// their session via `AuthManager.requireAuthenticatedUserIDForWrite()`.
     ///
-    /// Also used as the preview initializer: omit `guestStore` and pass
-    /// seed arrays to populate state without a network call.
+    /// Also used as the preview initializer: omit both and pass seed arrays
+    /// to populate state without a network call.
     init(
         guestStore:      GuestDataStore? = nil,
+        authManager:     AuthManager?    = nil,
         previewLogs:     [FoodLog]       = [],
         previewRecents:  [FoodLog]       = [],
         previewWeekLogs: [FoodLog]       = []
     ) {
         self.guestStore  = guestStore
+        self.authManager = authManager
         self.todayLogs   = previewLogs
         self.recentFoods = previewRecents
         self.weekLogs    = previewWeekLogs
@@ -211,9 +216,11 @@ final class FoodLogStore {
             return
         }
 
-        // Authenticated path: persist to Supabase, update in-memory from confirmed row.
+        // Authenticated path: validate the session (refreshing once if needed)
+        // before issuing the write, then persist to Supabase.
+        let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
         let payload = FoodLogInsert(
-            userId:       userId,
+            userId:       validUserId,
             foodName:     food.name,
             servingLabel: food.servingSize,
             quantity:     quantity,
@@ -260,7 +267,9 @@ final class FoodLogStore {
             return
         }
 
-        // Authenticated path: Supabase delete.
+        // Authenticated path: validate the session before issuing the delete.
+        // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
+        _ = try await authManager?.requireAuthenticatedUserIDForWrite()
         try await SupabaseClientProvider.shared
             .from("food_logs")
             .delete()

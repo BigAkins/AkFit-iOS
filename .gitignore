@@ -41,6 +41,7 @@ CLAUDE.md
 AGENTS.md
 docs/ui-reference/
 docs/supabase-reference/
+.planning/
 
 
 # Local app config overrides
@@ -59,4 +60,4 @@ fastlane/test_output
 
 # Logs
 *.log
-.gstack/
+skills-lock.json

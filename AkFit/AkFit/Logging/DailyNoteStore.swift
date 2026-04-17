@@ -24,15 +24,24 @@ final class DailyNoteStore {
     private(set) var todayContent: String = ""
     private(set) var isSaving:     Bool   = false
 
-    // MARK: - Guest store
+    // MARK: - Dependencies
 
     private let guestStore: GuestDataStore?
+    private let authManager: AuthManager?
     private var isGuest: Bool { guestStore?.isActive == true }
 
     // MARK: - Init
 
-    init(guestStore: GuestDataStore? = nil) {
-        self.guestStore = guestStore
+    /// Production initializer. Pass the shared `GuestDataStore` and
+    /// `AuthManager` from `AkFitApp` so `save` can pre-flight the session
+    /// via `AuthManager.requireAuthenticatedUserIDForWrite()` on the
+    /// authenticated path.
+    init(
+        guestStore: GuestDataStore? = nil,
+        authManager: AuthManager?   = nil
+    ) {
+        self.guestStore  = guestStore
+        self.authManager = authManager
     }
 
     // MARK: - Fetch
@@ -83,12 +92,13 @@ final class DailyNoteStore {
             return
         }
 
-        // Authenticated path: upsert to Supabase.
+        // Authenticated path: validate the session, then upsert to Supabase.
         isSaving = true
         defer { isSaving = false }
         do {
+            let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
             let payload = DailyNoteUpsert(
-                userId:    userId,
+                userId:    validUserId,
                 noteDate:  key,
                 content:   content,
                 updatedAt: Date()
