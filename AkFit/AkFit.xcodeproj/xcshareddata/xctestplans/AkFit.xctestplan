@@ -1,0 +1,28 @@
+{
+  "configurations" : [
+    {
+      "id" : "E7F9B9F7-4E3C-4F6A-8C3B-2C9F0A9B7A21",
+      "name" : "Default",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:AkFit.xcodeproj",
+      "identifier" : "61A1912E2F7921AE0061850D",
+      "name" : "AkFit"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:AkFit.xcodeproj",
+        "identifier" : "61A1913B2F7921AF0061850D",
+        "name" : "AkFitTests"
+      }
+    }
+  ],
+  "version" : 1
+}
