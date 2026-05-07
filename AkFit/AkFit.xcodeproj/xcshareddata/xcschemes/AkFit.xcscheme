@@ -60,6 +60,9 @@
             reference = "container:AkFit.xcodeproj/xcshareddata/xctestplans/AkFit.xctestplan"
             default = "YES">
          </TestPlanReference>
+         <TestPlanReference
+            reference = "container:AkFit.xcodeproj/xcshareddata/xctestplans/AkFitUILaunchChecks.xctestplan">
+         </TestPlanReference>
       </TestPlans>
    </TestAction>
    <LaunchAction
