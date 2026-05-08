@@ -13,9 +13,9 @@ import Foundation
 /// - Nutritional values are crowd-sourced and may contain errors or gaps.
 ///   The normalization layer handles missing fields gracefully (see `toFoodItem`).
 /// - Searching for generic foods ("chicken breast", "2 eggs") will surface branded
-///   variants rather than USDA-style generic entries. The in-app "Common foods"
-///   list (backed by `FoodItem.mockDatabase`) fills this gap for the prompt / empty
-///   state in `SearchView` — no change needed there.
+///   variants rather than USDA-style generic entries. `HybridFoodSearchService`
+///   queries Supabase `generic_foods` first and only falls back to OFF when the
+///   generic catalog has no match, so common-food searches stay clean.
 ///
 /// **To replace this service:** conform a new type to `FoodSearchService` and/or
 /// `BarcodeLookupService`, then swap the instance in `SearchView` and
