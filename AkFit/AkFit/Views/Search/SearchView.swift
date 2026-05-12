@@ -220,14 +220,7 @@ struct SearchView: View {
     /// Same logic as `DashboardView` — both read from the same shared stores.
     private var daySummary: DaySummary? {
         guard let goal = authManager.goal else { return nil }
-        var s = DaySummary.from(goal: goal)
-        for log in logStore.todayLogs {
-            s.consumedCalories += log.calories
-            s.consumedProteinG += Int(log.proteinG.rounded())
-            s.consumedCarbsG   += Int(log.carbsG.rounded())
-            s.consumedFatG     += Int(log.fatG.rounded())
-        }
-        return s
+        return DaySummary.from(goal: goal, logs: logStore.todayLogs)
     }
 
     /// A List-compatible section that renders `SearchDaySummaryCard` if the

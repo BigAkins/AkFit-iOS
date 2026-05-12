@@ -46,6 +46,39 @@ struct DaySummary {
         )
     }
 
+    /// Builds a `DaySummary` from the active goal and folds in today's food log
+    /// entries. Stored gram fields on `FoodLog` are pre-scaled, so we just sum.
+    /// Shared by Dashboard and Search so the daily totals stay consistent.
+    static func from(goal: UserGoal, logs: [FoodLog]) -> DaySummary {
+        var summary = from(goal: goal)
+        for log in logs {
+            summary.addConsumed(
+                calories: log.calories,
+                proteinG: log.proteinG,
+                carbsG:   log.carbsG,
+                fatG:     log.fatG
+            )
+        }
+        return summary
+    }
+
+    // MARK: - Consumption
+
+    /// Adds pre-scaled consumed macros to this summary. Used internally to fold
+    /// in a `FoodLog`, and externally by `FoodDetailView` to project the
+    /// not-yet-logged "After this log" budget.
+    mutating func addConsumed(
+        calories: Int,
+        proteinG: Double,
+        carbsG: Double,
+        fatG: Double
+    ) {
+        consumedCalories += calories
+        consumedProteinG += Int(proteinG.rounded())
+        consumedCarbsG   += Int(carbsG.rounded())
+        consumedFatG     += Int(fatG.rounded())
+    }
+
     // MARK: - Private
 
     private func fraction(consumed: Int, of target: Int) -> Double {

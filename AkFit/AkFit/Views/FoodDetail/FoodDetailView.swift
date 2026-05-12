@@ -55,18 +55,14 @@ struct FoodDetailView: View {
     /// environments without a seeded goal).
     private var afterLogSummary: DaySummary? {
         guard let goal = authManager.goal else { return nil }
-        var s = DaySummary.from(goal: goal)
-        for log in logStore.todayLogs {
-            s.consumedCalories += log.calories
-            s.consumedProteinG += Int(log.proteinG.rounded())
-            s.consumedCarbsG   += Int(log.carbsG.rounded())
-            s.consumedFatG     += Int(log.fatG.rounded())
-        }
+        var s = DaySummary.from(goal: goal, logs: logStore.todayLogs)
         // Project the current food at the currently-selected quantity.
-        s.consumedCalories += scaledCalories
-        s.consumedProteinG += Int(scaledProteinG.rounded())
-        s.consumedCarbsG   += Int(scaledCarbsG.rounded())
-        s.consumedFatG     += Int(scaledFatG.rounded())
+        s.addConsumed(
+            calories: scaledCalories,
+            proteinG: scaledProteinG,
+            carbsG:   scaledCarbsG,
+            fatG:     scaledFatG
+        )
         return s
     }
 
