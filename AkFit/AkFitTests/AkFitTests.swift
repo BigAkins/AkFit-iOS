@@ -104,6 +104,109 @@ struct DaySummaryTests {
         #expect(summary.consumedCalories == 0)
         #expect(summary.remainingCalories == 1900)
     }
+
+    // MARK: - Factory with logs
+
+    private static func makeGoal(
+        calories: Int = 2100, protein: Int = 165, carbs: Int = 220, fat: Int = 65
+    ) -> UserGoal {
+        UserGoal(
+            id: UUID(), userId: UUID(),
+            goalType: .fatLoss,
+            targetWeight: nil, targetPace: .moderate,
+            dailyCalories: calories, dailyProtein: protein,
+            dailyCarbs: carbs, dailyFat: fat,
+            createdAt: Date(), updatedAt: Date()
+        )
+    }
+
+    private static func makeLog(
+        calories: Int, proteinG: Double, carbsG: Double, fatG: Double
+    ) -> FoodLog {
+        let uid = UUID()
+        return FoodLog(
+            id: UUID(), userId: uid,
+            foodName: "test", servingLabel: "100g", quantity: 1.0,
+            calories: calories, proteinG: proteinG, carbsG: carbsG, fatG: fatG,
+            mealSlot: .snack, loggedAt: Date(), createdAt: Date()
+        )
+    }
+
+    @Test func from_goalLogs_emptyLogsLeavesConsumedZero() {
+        let summary = DaySummary.from(goal: Self.makeGoal(), logs: [])
+        #expect(summary.consumedCalories == 0)
+        #expect(summary.consumedProteinG == 0)
+        #expect(summary.consumedCarbsG   == 0)
+        #expect(summary.consumedFatG     == 0)
+        #expect(summary.remainingCalories == 2100)
+    }
+
+    @Test func from_goalLogs_sumsPreScaledMacros() {
+        // Two logs: totals = 402 kcal, P 51.9g, C 29.0g, F 7.2g.
+        // Macro grams round half-to-even per Double.rounded(): 52, 29, 7.
+        let logs = [
+            Self.makeLog(calories: 154, proteinG: 5.4,  carbsG: 26.0, fatG: 2.8),
+            Self.makeLog(calories: 248, proteinG: 46.5, carbsG: 3.0,  fatG: 4.4),
+        ]
+        let summary = DaySummary.from(goal: Self.makeGoal(), logs: logs)
+
+        #expect(summary.consumedCalories == 402)
+        #expect(summary.consumedProteinG == 52)   // 5.4 → 5 + 46.5 → 47   (round half-to-even)
+        #expect(summary.consumedCarbsG   == 29)   // 26 + 3
+        #expect(summary.consumedFatG     == 7)    // 2.8 → 3 + 4.4 → 4
+        #expect(summary.remainingCalories == 1698)
+    }
+
+    @Test func from_goalLogs_matchesManualLoop() {
+        // Behavior-preservation check: the new factory must produce the same
+        // result as the hand-rolled loop the views used before.
+        let goal = Self.makeGoal()
+        let logs = [
+            Self.makeLog(calories: 154, proteinG: 5.4,  carbsG: 26.0, fatG: 2.8),
+            Self.makeLog(calories: 248, proteinG: 46.5, carbsG: 0.0,  fatG: 5.4),
+            Self.makeLog(calories: 120, proteinG: 24.0, carbsG: 3.0,  fatG: 1.5),
+        ]
+
+        var manual = DaySummary.from(goal: goal)
+        for log in logs {
+            manual.consumedCalories += log.calories
+            manual.consumedProteinG += Int(log.proteinG.rounded())
+            manual.consumedCarbsG   += Int(log.carbsG.rounded())
+            manual.consumedFatG     += Int(log.fatG.rounded())
+        }
+
+        let helper = DaySummary.from(goal: goal, logs: logs)
+
+        #expect(helper.consumedCalories == manual.consumedCalories)
+        #expect(helper.consumedProteinG == manual.consumedProteinG)
+        #expect(helper.consumedCarbsG   == manual.consumedCarbsG)
+        #expect(helper.consumedFatG     == manual.consumedFatG)
+    }
+
+    // MARK: - addConsumed
+
+    @Test func addConsumed_addsPreScaledMacros() {
+        var summary = DaySummary.from(goal: Self.makeGoal())
+        summary.addConsumed(calories: 300, proteinG: 31.0, carbsG: 0.0, fatG: 3.6)
+
+        #expect(summary.consumedCalories == 300)
+        #expect(summary.consumedProteinG == 31)
+        #expect(summary.consumedCarbsG   == 0)
+        #expect(summary.consumedFatG     == 4)   // 3.6 → 4
+    }
+
+    @Test func addConsumed_stacksOnExistingConsumption() {
+        // Verifies the FoodDetail "After this log" projection pattern:
+        // start from today's logs, then layer the not-yet-logged food on top.
+        let logs = [Self.makeLog(calories: 200, proteinG: 20.0, carbsG: 10.0, fatG: 5.0)]
+        var summary = DaySummary.from(goal: Self.makeGoal(), logs: logs)
+        summary.addConsumed(calories: 165, proteinG: 31.0, carbsG: 0.0, fatG: 3.6)
+
+        #expect(summary.consumedCalories == 365)
+        #expect(summary.consumedProteinG == 51)
+        #expect(summary.consumedCarbsG   == 10)
+        #expect(summary.consumedFatG     == 9)   // 5 + 4
+    }
 }
 
 // MARK: - UserProfile computed property tests

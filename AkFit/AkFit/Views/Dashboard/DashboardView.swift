@@ -27,14 +27,7 @@ struct DashboardView: View {
     /// Computed synchronously — no async work in the view.
     private var summary: DaySummary? {
         guard let goal = authManager.goal else { return nil }
-        var s = DaySummary.from(goal: goal)
-        for log in logStore.todayLogs {
-            s.consumedCalories += log.calories
-            s.consumedProteinG += Int(log.proteinG.rounded())
-            s.consumedCarbsG   += Int(log.carbsG.rounded())
-            s.consumedFatG     += Int(log.fatG.rounded())
-        }
-        return s
+        return DaySummary.from(goal: goal, logs: logStore.todayLogs)
     }
 
     /// Meal slots that have at least one log entry today, in canonical order.
