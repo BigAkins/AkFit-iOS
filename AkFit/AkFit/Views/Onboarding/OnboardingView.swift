@@ -501,6 +501,40 @@ private struct ResultsStepView: View {
     @State private var isSaving: Bool = false
     @State private var errorMessage: String? = nil
 
+    private enum SaveStep: String {
+        case sessionValidation = "session_validation"
+        case profileUpsert = "profile_upsert"
+        case goalInsert = "goal_insert"
+
+        var table: String {
+            switch self {
+            case .sessionValidation: "auth"
+            case .profileUpsert: "profiles"
+            case .goalInsert: "goals"
+            }
+        }
+
+        var action: String {
+            switch self {
+            case .sessionValidation: "validate_session"
+            case .profileUpsert: "upsert"
+            case .goalInsert: "insert"
+            }
+        }
+    }
+
+    private struct SaveErrorReport {
+        let step: SaveStep
+        let sessionValidated: Bool
+        let classification: String
+        let postgrestCode: String
+        let authCode: String
+
+        var debugSummary: String {
+            "step=\(step.rawValue) table=\(step.table) action=\(step.action) session_validated=\(sessionValidated) classification=\(classification) postgrest_code=\(postgrestCode) auth_code=\(authCode)"
+        }
+    }
+
     private var output: MacroCalculator.Output? {
         data.calculatorInput.map { MacroCalculator.calculate($0) }
     }
@@ -640,43 +674,47 @@ private struct ResultsStepView: View {
             }
 
             // Authenticated path: persist to Supabase.
+            var saveStep: SaveStep = .sessionValidation
+            var sessionValidated = false
+
             do {
                 let userId = try await authManager.requireAuthenticatedUserIDForWrite()
-                debugOnboardingSave(
-                    "saving targets for user \(userId.uuidString) goal=\(input.goalType.rawValue) activity=\(input.activityLevel.rawValue)"
-                )
+                sessionValidated = true
+                debugOnboardingSave("step=session_validation session_validated=true")
 
                 // ── Profile upsert ────────────────────────────────────────
-                debugOnboardingSave(
-                    "profiles upsert payload id=\(userId.uuidString) height_cm=\(Int(input.heightCm.rounded())) weight_kg=\(Int(input.weightKg.rounded())) sex=\(input.sex.rawValue) activity_level=\(input.activityLevel.rawValue)"
-                )
+                saveStep = .profileUpsert
+                debugOnboardingSave("step=profile_upsert table=profiles action=upsert")
                 let profile = try await ProfileService.upsert(
                     userId: userId,
                     input: input,
                     displayName: displayName,
                     birthdate: birthdate
                 )
-                debugOnboardingSave("profiles upsert succeeded for user \(userId.uuidString)")
+                debugOnboardingSave("step=profile_upsert table=profiles action=upsert result=success")
 
                 // ── Goal insert ──────────────────────────────────────────
-                let paceForLog = input.goalType == .maintenance ? "nil" : input.pace.rawValue
-                debugOnboardingSave(
-                    "goals insert payload user_id=\(userId.uuidString) goal_type=\(input.goalType.rawValue) target_pace=\(paceForLog) calories=\(out.calories)"
-                )
+                saveStep = .goalInsert
+                debugOnboardingSave("step=goal_insert table=goals action=insert")
                 let goal = try await GoalService.insert(
                     userId: userId,
                     input: input,
                     out: out
                 )
-                debugOnboardingSave("goals insert succeeded with id \(goal.id.uuidString)")
+                debugOnboardingSave("step=goal_insert table=goals action=insert result=success")
 
                 authManager.markOnboarded(goal: goal, profile: profile)
             } catch {
-                onboardingLogger.error(
-                    "save() failed — \(String(describing: error), privacy: .public)"
+                let report = describeOnboardingSaveError(
+                    error,
+                    step: saveStep,
+                    sessionValidated: sessionValidated
                 )
-                debugOnboardingSave("save failed: \(describeOnboardingSaveError(error))")
-                if error is AuthError {
+                onboardingLogger.error(
+                    "save() failed step=\(report.step.rawValue, privacy: .public) table=\(report.step.table, privacy: .public) action=\(report.step.action, privacy: .public) session_validated=\(report.sessionValidated, privacy: .public) classification=\(report.classification, privacy: .public) postgrest_code=\(report.postgrestCode, privacy: .public) auth_code=\(report.authCode, privacy: .public)"
+                )
+                debugOnboardingSave("save failed \(report.debugSummary)")
+                if shouldShowSessionExpiredMessage(for: error) {
                     errorMessage = "Session expired. Please sign out and sign back in."
                 } else {
                     errorMessage = "Couldn't save your targets. Please try again."
@@ -691,12 +729,100 @@ private struct ResultsStepView: View {
         #endif
     }
 
-    private func describeOnboardingSaveError(_ error: Error) -> String {
-        if let postgrestError = error as? PostgrestError {
-            return "postgrest code=\(postgrestError.code ?? "nil") message=\(postgrestError.message) detail=\(postgrestError.detail ?? "nil") hint=\(postgrestError.hint ?? "nil")"
+    private func describeOnboardingSaveError(
+        _ error: Error,
+        step: SaveStep,
+        sessionValidated: Bool
+    ) -> SaveErrorReport {
+        let defaultCode = "none"
+
+        if let authError = error as? AuthError {
+            return SaveErrorReport(
+                step: step,
+                sessionValidated: sessionValidated,
+                classification: classifyAuthError(authError),
+                postgrestCode: defaultCode,
+                authCode: authErrorCode(authError)
+            )
         }
 
-        return String(describing: error)
+        if let postgrestError = error as? PostgrestError {
+            return SaveErrorReport(
+                step: step,
+                sessionValidated: sessionValidated,
+                classification: classifyPostgrestError(postgrestError),
+                postgrestCode: postgrestError.code ?? defaultCode,
+                authCode: defaultCode
+            )
+        }
+
+        return SaveErrorReport(
+            step: step,
+            sessionValidated: sessionValidated,
+            classification: "unexpected_error",
+            postgrestCode: defaultCode,
+            authCode: defaultCode
+        )
+    }
+
+    private func classifyPostgrestError(_ error: PostgrestError) -> String {
+        switch error.code {
+        case "42501":
+            return "postgrest_permission_denied"
+        case "23502":
+            return "postgrest_not_null_violation"
+        case "23503":
+            return "postgrest_foreign_key_violation"
+        case "23505":
+            return "postgrest_unique_violation"
+        case "23514":
+            return "postgrest_check_violation"
+        case "PGRST116":
+            return "postgrest_no_rows_returned"
+        case "PGRST301":
+            return "postgrest_jwt_invalid"
+        default:
+            return "postgrest_error"
+        }
+    }
+
+    private func classifyAuthError(_ error: AuthError) -> String {
+        switch error {
+        case .sessionMissing:
+            return "auth_session_missing"
+        case .jwtVerificationFailed:
+            return "auth_jwt_verification_failed"
+        case .api:
+            return "auth_api_error"
+        default:
+            return "auth_error"
+        }
+    }
+
+    private func authErrorCode(_ error: AuthError) -> String {
+        switch error {
+        case let .api(_, errorCode, _, underlyingResponse):
+            return "\(underlyingResponse.statusCode):\(errorCode.rawValue)"
+        case .sessionMissing:
+            return "session_missing"
+        case .jwtVerificationFailed:
+            return "jwt_verification_failed"
+        default:
+            return "auth_error"
+        }
+    }
+
+    private func shouldShowSessionExpiredMessage(for error: Error) -> Bool {
+        if error is AuthError { return true }
+
+        guard let postgrestError = error as? PostgrestError else {
+            return false
+        }
+
+        let message = postgrestError.message.lowercased()
+        return postgrestError.code == "PGRST301"
+            || message.contains("jwt")
+            || message.contains("auth")
     }
 }
 
