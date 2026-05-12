@@ -17,10 +17,11 @@ struct SupabaseFoodSearchService: FoodSearchService {
         // Normalize the query the same way the DB search_text column is normalized:
         // remove apostrophes, replace hyphens with spaces, collapse whitespace.
         // Then apply known aliases (e.g. "innout" → "in n out").
-        let normalized = SearchTextMatcher.normalizedQuery(q)
+        let queryMatch = SearchTextMatcher.queryMatch(for: q)
+        let normalized = queryMatch.normalized
         guard !normalized.isEmpty else { return [] }
 
-        let words = normalized.split(separator: " ").map(String.init)
+        let words = queryMatch.words
 
         do {
             let rows: [GenericFoodRow]
@@ -52,7 +53,7 @@ struct SupabaseFoodSearchService: FoodSearchService {
                 rows = candidates.filter { row in
                     SearchTextMatcher.matchesAllQueryWords(
                         term: row.foodName,
-                        normalizedQuery: normalized
+                        queryMatch: queryMatch
                     )
                 }
             }
@@ -60,11 +61,10 @@ struct SupabaseFoodSearchService: FoodSearchService {
             // Re-rank client-side by match quality so exact/prefix matches surface
             // before weaker substring hits. Dessert/processed items get a penalty
             // so whole foods rank above them for plain queries like "strawberry".
-            let isPlainFoodQuery = SearchTextMatcher.isPlainFoodQuery(normalized)
             return rows.map(FoodItem.init).sorted { a, b in
-                var sa = SearchTextMatcher.matchScore(name: a.name, query: normalized)
-                var sb = SearchTextMatcher.matchScore(name: b.name, query: normalized)
-                if isPlainFoodQuery {
+                var sa = SearchTextMatcher.matchScore(name: a.name, queryMatch: queryMatch)
+                var sb = SearchTextMatcher.matchScore(name: b.name, queryMatch: queryMatch)
+                if queryMatch.isPlainFoodQuery {
                     if SearchTextMatcher.isDessertOrProcessed(SearchTextMatcher.normalizeForSearch(a.name)) { sa += 1 }
                     if SearchTextMatcher.isDessertOrProcessed(SearchTextMatcher.normalizeForSearch(b.name)) { sb += 1 }
                 }

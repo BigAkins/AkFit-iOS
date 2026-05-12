@@ -37,6 +37,7 @@ CLAUDE.md
 .claude/
 .vscode/
 .codex/
+.memsearch/
 .agents/
 AGENTS.md
 docs/ui-reference/

@@ -47,6 +47,36 @@ struct SearchTextMatcherTests {
         #expect(matches.contains("Strawberry Milkshake"))
     }
 
+    @Test func precomputedQueryMatch_preservesWordMatchingBehavior() {
+        let normalized = SearchTextMatcher.normalizedQuery("strawberry")
+        let queryMatch = SearchTextMatcher.QueryMatch(normalizedQuery: normalized)
+
+        #expect(
+            SearchTextMatcher.matchesAllQueryWords(term: "Strawberries", queryMatch: queryMatch) ==
+            SearchTextMatcher.matchesAllQueryWords(term: "Strawberries", normalizedQuery: normalized)
+        )
+        #expect(
+            SearchTextMatcher.matchesAllQueryWords(term: "Blueberries", queryMatch: queryMatch) ==
+            SearchTextMatcher.matchesAllQueryWords(term: "Blueberries", normalizedQuery: normalized)
+        )
+    }
+
+    @Test func precomputedQueryMatch_preservesSuggestionResults() {
+        let pool = [
+            "Chicken Breast, cooked",
+            "Chick-fil-A Chicken Sandwich",
+            "In-N-Out Burger",
+            "Strawberries",
+            "Strawberry Milkshake",
+        ]
+        let queryMatch = SearchTextMatcher.queryMatch(for: "strawberry")
+
+        #expect(
+            SearchTextMatcher.suggestions(for: queryMatch, in: pool) ==
+            SearchTextMatcher.suggestions(for: "strawberry", in: pool)
+        )
+    }
+
     @Test func suggestions_rankWholeFoodBeforeDessertForPlainQuery() {
         let pool = [
             "Strawberry Milkshake",

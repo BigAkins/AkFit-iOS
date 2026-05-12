@@ -579,7 +579,8 @@ struct SearchView: View {
     /// names). Supports multi-word queries, stem-aware matching ("strawberry"
     /// finds "Strawberries"), and fuzzy fallback for typos.
     private func matchingSuggestions(for query: String) -> [String] {
-        SearchTextMatcher.suggestions(for: query, in: suggestionPool)
+        let queryMatch = SearchTextMatcher.queryMatch(for: query)
+        return SearchTextMatcher.suggestions(for: queryMatch, in: suggestionPool)
     }
 
     // MARK: - Search logic

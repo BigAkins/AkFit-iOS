@@ -3,6 +3,27 @@ import Foundation
 /// Pure search text helpers shared by Supabase-backed search and type-ahead.
 enum SearchTextMatcher {
 
+    /// Precomputed query text used to avoid re-splitting and re-stemming the
+    /// same query while filtering candidate rows or suggestion terms.
+    struct QueryMatch {
+        let normalized: String
+        let words: [String]
+        let stemmedWords: [String]
+        let isPlainFoodQuery: Bool
+
+        init(normalizedQuery: String) {
+            normalized = normalizedQuery
+            words = normalizedQuery.split(separator: " ").map(String.init)
+            stemmedWords = words.map { SearchTextMatcher.stemWord($0) }
+            isPlainFoodQuery = words.count <= 2 && words.allSatisfy { $0.allSatisfy(\.isLetter) }
+        }
+    }
+
+    /// Returns normalized query text plus precomputed word/stem metadata.
+    static func queryMatch(for query: String) -> QueryMatch {
+        QueryMatch(normalizedQuery: normalizedQuery(query))
+    }
+
     /// Normalizes user-entered query text and applies known aliases.
     static func normalizedQuery(_ text: String) -> String {
         applyQueryAliases(normalizeForSearch(text))
@@ -74,13 +95,17 @@ enum SearchTextMatcher {
     /// Returns true when every normalized query word matches the term either
     /// directly or through the rough plural stem.
     static func matchesAllQueryWords(term: String, normalizedQuery: String) -> Bool {
-        guard !normalizedQuery.isEmpty else { return false }
-        let words = normalizedQuery.split(separator: " ").map(String.init)
-        let stemmedWords = words.map { stemWord($0) }
+        matchesAllQueryWords(term: term, queryMatch: QueryMatch(normalizedQuery: normalizedQuery))
+    }
+
+    /// Returns true when every precomputed query word matches the term either
+    /// directly or through the rough plural stem.
+    static func matchesAllQueryWords(term: String, queryMatch: QueryMatch) -> Bool {
+        guard !queryMatch.normalized.isEmpty else { return false }
         let normalizedTerm = normalizeForSearch(term)
         let stemmedTerm = stemmedForm(normalizedTerm)
-        return words.allSatisfy { normalizedTerm.contains($0) } ||
-               stemmedWords.allSatisfy { stemmedTerm.contains($0) }
+        return queryMatch.words.allSatisfy { normalizedTerm.contains($0) } ||
+               queryMatch.stemmedWords.allSatisfy { stemmedTerm.contains($0) }
     }
 
     /// Levenshtein edit distance between two strings. Used for typo tolerance
@@ -107,18 +132,24 @@ enum SearchTextMatcher {
     /// Lower = better match. Supports stem-aware comparison so "strawberry"
     /// matches "strawberries" at full quality.
     static func matchScore(name: String, query q: String) -> Int {
+        matchScore(name: name, queryMatch: QueryMatch(normalizedQuery: q))
+    }
+
+    /// Scores how closely `name` matches a precomputed query. Lower = better.
+    static func matchScore(name: String, queryMatch: QueryMatch) -> Int {
+        let q = queryMatch.normalized
         let n = normalizeForSearch(name)
         if n == q { return 0 }
 
         let nStemmed = stemmedForm(n)
-        let qStemmed = stemmedForm(q)
+        let qStemmed = queryMatch.stemmedWords.joined(separator: " ")
         if nStemmed == qStemmed { return 0 }
 
         if n.hasPrefix(q) || nStemmed.hasPrefix(qStemmed) { return 1 }
 
-        let qWords = q.split(separator: " ").map(String.init)
+        let qWords = queryMatch.words
         let nWords = n.split(separator: " ").map(String.init)
-        let qStems = qWords.map { stemWord($0) }
+        let qStems = queryMatch.stemmedWords
         let nStems = nWords.map { stemWord($0) }
 
         if qWords.count <= 1 {
@@ -146,8 +177,7 @@ enum SearchTextMatcher {
     }
 
     static func isPlainFoodQuery(_ normalizedQuery: String) -> Bool {
-        let words = normalizedQuery.split(separator: " ").map(String.init)
-        return words.count <= 2 && words.allSatisfy { $0.allSatisfy(\.isLetter) }
+        QueryMatch(normalizedQuery: normalizedQuery).isPlainFoodQuery
     }
 
     /// Words that indicate a dessert or processed item. When the user's query
@@ -169,25 +199,26 @@ enum SearchTextMatcher {
     /// match quality. This is the former SearchView type-ahead behavior as a
     /// pure helper so it can be unit-tested without UI state.
     static func suggestions(for query: String, in suggestionPool: [String], limit: Int = 6) -> [String] {
-        let normalized = normalizedQuery(query)
-        guard normalized.count >= 1 else { return [] }
+        suggestions(for: queryMatch(for: query), in: suggestionPool, limit: limit)
+    }
 
-        let words = normalized.split(separator: " ").map(String.init)
-        let penalizeDesserts = isPlainFoodQuery(normalized)
+    /// Returns up to `limit` suggestion terms for a precomputed query match.
+    static func suggestions(for queryMatch: QueryMatch, in suggestionPool: [String], limit: Int = 6) -> [String] {
+        guard queryMatch.normalized.count >= 1 else { return [] }
 
         // Substring + stem matching (primary)
         var matches = suggestionPool.filter { term in
-            matchesAllQueryWords(term: term, normalizedQuery: normalized)
+            matchesAllQueryWords(term: term, queryMatch: queryMatch)
         }
 
         // Fuzzy fallback: if fewer than 3 substring matches, try edit distance
         // on each word of the food name. Only for queries >= 3 chars to avoid
         // noise on very short inputs.
-        if matches.count < 3 && normalized.count >= 3 {
+        if matches.count < 3 && queryMatch.normalized.count >= 3 {
             let fuzzy = suggestionPool.filter { term in
                 guard !matches.contains(term) else { return false }
                 let nWords = normalizeForSearch(term).split(separator: " ").map(String.init)
-                return words.allSatisfy { qw in
+                return queryMatch.words.allSatisfy { qw in
                     nWords.contains { nw in
                         // Allow edit distance <= 2, but scale: for short words (<=4 chars) only allow 1
                         let maxDist = qw.count <= 4 ? 1 : 2
@@ -201,9 +232,9 @@ enum SearchTextMatcher {
 
         return matches
             .sorted { a, b in
-                var sa = matchScore(name: a, query: normalized)
-                var sb = matchScore(name: b, query: normalized)
-                if penalizeDesserts {
+                var sa = matchScore(name: a, queryMatch: queryMatch)
+                var sb = matchScore(name: b, queryMatch: queryMatch)
+                if queryMatch.isPlainFoodQuery {
                     let na = normalizeForSearch(a)
                     let nb = normalizeForSearch(b)
                     if isDessertOrProcessed(na) { sa += 1 }
