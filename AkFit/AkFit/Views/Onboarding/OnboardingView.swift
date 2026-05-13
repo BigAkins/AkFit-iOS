@@ -12,18 +12,19 @@ private let onboardingLogger = Logger(
 /// Step order:
 ///   1. Name  (preferred display name — optional / skippable)
 ///   2. Sex selection
-///   3. Height & weight (birth year · height · weight)
-///   4. Goal type
-///   5. Activity level
-///   6. Pace  (skipped for maintenance)
-///   7. Results + persist
+///   3. Date of birth
+///   4. Height & weight
+///   5. Goal type
+///   6. Activity level
+///   7. Pace  (skipped for maintenance)
+///   8. Results + persist
 struct OnboardingView: View {
     @Environment(AuthManager.self) private var authManager
     @State private var data = OnboardingData()
     @State private var step: Step = .name
 
     enum Step: Int, CaseIterable {
-        case name, sex, bodyStats, goal, activity, pace, results
+        case name, sex, birthdate, bodyStats, goal, activity, pace, results
     }
 
     var body: some View {
@@ -89,7 +90,7 @@ struct OnboardingView: View {
         if authManager.pendingAppleDisplayName == nil {
             steps.append(.name)
         }
-        steps.append(contentsOf: [.sex, .bodyStats, .goal, .activity])
+        steps.append(contentsOf: [.sex, .birthdate, .bodyStats, .goal, .activity])
         if data.goalType != .maintenance { steps.append(.pace) }
         steps.append(.results)
         return steps
@@ -102,6 +103,7 @@ struct OnboardingView: View {
         switch step {
         case .name:      NameStepView(data: data, onNext: advance)
         case .sex:       SexStepView(data: data, onNext: advance)
+        case .birthdate: BirthdateStepView(data: data, onNext: advance)
         case .bodyStats: BodyStatsStepView(data: data, onNext: advance)
         case .goal:      GoalStepView(data: data, onNext: advance)
         case .activity:  ActivityStepView(data: data, onNext: advance)
@@ -253,18 +255,16 @@ private struct SexStepView: View {
     }
 }
 
-// MARK: - Step 2: Body stats
+// MARK: - Step 3: Date of birth
 
-private struct BodyStatsStepView: View {
+private struct BirthdateStepView: View {
     @Bindable var data: OnboardingData
     let onNext: () -> Void
 
-    // Ranges computed once — values are stable for the app session.
-    private static let minBirthdate   = Calendar.current.date(byAdding: .year, value: -80, to: Date())!
-    private static let maxBirthdate   = Calendar.current.date(byAdding: .year, value: -15, to: Date())!
-    private static let feetRange      = Array(4...7)
-    private static let inchesRange    = Array(0...11)
-    private static let weightLbsRange = Array(66...440)   // 30–200 kg
+    // 15–80 years matches the existing onboarding range; values are stable
+    // for the app session.
+    private static let minBirthdate = Calendar.current.date(byAdding: .year, value: -80, to: Date())!
+    private static let maxBirthdate = Calendar.current.date(byAdding: .year, value: -15, to: Date())!
 
     /// Bridges the three separate Int fields (year/month/day) on `OnboardingData`
     /// to a single `Date` used by the DatePicker. Writes back on change.
@@ -288,22 +288,42 @@ private struct BodyStatsStepView: View {
 
     var body: some View {
         OnboardingStepLayout(
+            title: "Date of birth",
+            subtitle: "Used to estimate your calorie and macro targets."
+        ) {
+            DatePicker(
+                "Date of birth",
+                selection: birthdateBinding,
+                in: Self.minBirthdate...Self.maxBirthdate,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.wheel)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 24)
+        } footer: {
+            CTAButton(label: "Continue", action: onNext)
+        }
+    }
+}
+
+// MARK: - Step 4: Body stats
+
+private struct BodyStatsStepView: View {
+    @Bindable var data: OnboardingData
+    let onNext: () -> Void
+
+    // Ranges computed once — values are stable for the app session.
+    private static let feetRange      = Array(4...7)
+    private static let inchesRange    = Array(0...11)
+    private static let weightLbsRange = Array(66...440)   // 30–200 kg
+
+    var body: some View {
+        OnboardingStepLayout(
             title: "Height & weight",
             subtitle: "Used to calculate your calorie and macro targets."
         ) {
             VStack(spacing: 0) {
-                // Date of birth — compact DatePicker (taps open a calendar sheet).
-                DatePicker(
-                    "Date of birth",
-                    selection: birthdateBinding,
-                    in: Self.minBirthdate...Self.maxBirthdate,
-                    displayedComponents: .date
-                )
-                .datePickerStyle(.compact)
-                .padding(.horizontal, 24)
-
-                Divider().padding(.horizontal, 24)
-
                 // Height (ft + in) and weight (lbs) — three equal columns.
                 // Internal storage stays metric; pickers bind to US-unit properties.
                 HStack(spacing: 0) {
