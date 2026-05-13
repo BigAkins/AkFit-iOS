@@ -33,10 +33,48 @@
 -- that any specified clause be provided in full.
 -- =============================================================================
 
-alter policy "goals: update own" on public.goals
-    using      (auth.uid() = user_id)
-    with check (auth.uid() = user_id);
+do $$
+begin
+    if exists (
+        select 1
+        from pg_policies
+        where schemaname = 'public'
+          and tablename = 'goals'
+          and policyname = 'goals: update own'
+    ) then
+        alter policy "goals: update own" on public.goals
+            using      (auth.uid() = user_id)
+            with check (auth.uid() = user_id);
+    else
+        raise exception 'No goals update policy found on public.goals; expected "goals: update own"';
+    end if;
+end
+$$;
 
-alter policy "profiles: update own" on public.profiles
-    using      (auth.uid() = id)
-    with check (auth.uid() = id);
+do $$
+begin
+    if exists (
+        select 1
+        from pg_policies
+        where schemaname = 'public'
+          and tablename = 'profiles'
+          and policyname = 'profiles: update own'
+    ) then
+        alter policy "profiles: update own" on public.profiles
+            using      (auth.uid() = id)
+            with check (auth.uid() = id);
+    elsif exists (
+        select 1
+        from pg_policies
+        where schemaname = 'public'
+          and tablename = 'profiles'
+          and policyname = 'Users can update their own profile'
+    ) then
+        alter policy "Users can update their own profile" on public.profiles
+            using      (auth.uid() = id)
+            with check (auth.uid() = id);
+    else
+        raise exception 'No profile update policy found on public.profiles; expected "profiles: update own" or "Users can update their own profile"';
+    end if;
+end
+$$;
