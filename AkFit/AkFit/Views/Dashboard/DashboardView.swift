@@ -165,17 +165,26 @@ struct DashboardView: View {
                                 Section {
                                     ForEach(logs(for: slot)) { log in
                                         FoodLogRow(log: log)
+                                            // Swipe-to-delete is today-only.
+                                            // Past days are read-only history in
+                                            // this branch — surfacing a destructive
+                                            // action there risks accidental historic
+                                            // data loss. An empty content closure
+                                            // means SwiftUI renders no swipe action
+                                            // at all for those rows.
                                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
-                                                Button(role: .destructive) {
-                                                    Task {
-                                                        do {
-                                                            try await logStore.delete(logId: log.id)
-                                                        } catch {
-                                                            showDeleteError = true
+                                                if isViewingToday {
+                                                    Button(role: .destructive) {
+                                                        Task {
+                                                            do {
+                                                                try await logStore.delete(logId: log.id)
+                                                            } catch {
+                                                                showDeleteError = true
+                                                            }
                                                         }
+                                                    } label: {
+                                                        Label("Delete", systemImage: "trash")
                                                     }
-                                                } label: {
-                                                    Label("Delete", systemImage: "trash")
                                                 }
                                             }
                                             .listRowBackground(Color(.systemGray6))
