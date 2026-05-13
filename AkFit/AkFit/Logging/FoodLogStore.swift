@@ -26,6 +26,15 @@ final class FoodLogStore {
     private(set) var todayLogs:      [FoodLog] = []
     private(set) var recentFoods:    [FoodLog] = []
     private(set) var weekLogs:       [FoodLog] = []
+    /// Logs for the user-selected day on `DashboardView`. When `dayLogsDate`
+    /// is today, this mirrors `todayLogs`; otherwise it holds a past-day fetch.
+    /// Search and FoodDetail continue to read `todayLogs` directly so their
+    /// "After this log" math stays anchored to today regardless of what the
+    /// Dashboard is showing.
+    private(set) var dayLogs:        [FoodLog] = []
+    /// Start-of-day (device-local) of the day currently held in `dayLogs`.
+    /// `nil` until the first `refreshDay(userId:date:)` call completes.
+    private(set) var dayLogsDate:    Date?     = nil
     private(set) var isRefreshing:   Bool      = false
     private(set) var refreshFailed:  Bool      = false
     private(set) var lastLoggedEntry: FoodLog? = nil
@@ -81,6 +90,8 @@ final class FoodLogStore {
         todayLogs       = []
         recentFoods     = []
         weekLogs        = []
+        dayLogs         = []
+        dayLogsDate     = nil
         isRefreshing    = false
         refreshFailed   = false
         lastLoggedEntry = nil
@@ -115,6 +126,63 @@ final class FoodLogStore {
                 .execute()
                 .value
             todayLogs = logs
+        } catch {
+            refreshFailed = true
+        }
+    }
+
+    // MARK: - Fetch arbitrary day
+
+    /// Fetches food log entries for the given calendar day (device-local).
+    /// Used by `DashboardView` when the user navigates to past days.
+    ///
+    /// When `date` is today the existing `refreshToday` path is reused so
+    /// `todayLogs` stays canonical for Search and FoodDetail; `dayLogs` is
+    /// then mirrored from `todayLogs`. For past days, only `dayLogs` and
+    /// `dayLogsDate` are written.
+    func refreshDay(userId: UUID, date: Date) async {
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: date)
+
+        if cal.isDateInToday(day) {
+            await refreshToday(userId: userId)
+            dayLogs     = todayLogs
+            dayLogsDate = day
+            return
+        }
+
+        isRefreshing  = true
+        refreshFailed = false
+        defer { isRefreshing = false }
+
+        let end = cal.date(byAdding: .day, value: 1, to: day)!
+
+        // Guest path: filter the in-memory guest store by the day range.
+        if let gs = guestStore, gs.isActive {
+            dayLogs = gs.allFoodLogs
+                .filter { $0.loggedAt >= day && $0.loggedAt < end }
+                .sorted { $0.loggedAt < $1.loggedAt }
+            dayLogsDate = day
+            return
+        }
+
+        // Authenticated path: Supabase.
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let startISO = fmt.string(from: day)
+        let endISO   = fmt.string(from: end)
+        do {
+            let logs: [FoodLog] = try await SupabaseClientProvider.shared
+                .from("food_logs")
+                .select()
+                .eq("user_id", value: userId.uuidString)
+                .gte("logged_at", value: startISO)
+                .lt("logged_at", value: endISO)
+                .order("logged_at", ascending: true)
+                .execute()
+                .value
+            dayLogs     = logs
+            dayLogsDate = day
         } catch {
             refreshFailed = true
         }
@@ -282,6 +350,7 @@ final class FoodLogStore {
         todayLogs.removeAll   { $0.id == logId }
         weekLogs.removeAll    { $0.id == logId }
         recentFoods.removeAll { $0.id == logId }
+        dayLogs.removeAll     { $0.id == logId }
     }
 
     // MARK: - Date helpers
