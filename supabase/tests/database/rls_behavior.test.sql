@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public;
 
-select plan(28);
+select plan(30);
 
 create function public.test_affected_rows(sql text)
 returns int
@@ -160,6 +160,38 @@ select is(
     'user A can update their own profile'
 );
 
+select lives_ok(
+    $$insert into public.profiles (
+          id,
+          display_name,
+          height_cm,
+          weight_kg,
+          birthdate,
+          sex,
+          activity_level,
+          updated_at
+      )
+      values (
+          '11111111-1111-1111-1111-111111111111',
+          'User A upserted',
+          170,
+          75,
+          '1990-01-01',
+          'male',
+          'moderate',
+          now()
+      )
+      on conflict (id) do update
+          set display_name   = excluded.display_name,
+              height_cm      = excluded.height_cm,
+              weight_kg      = excluded.weight_kg,
+              birthdate      = excluded.birthdate,
+              sex            = excluded.sex,
+              activity_level = excluded.activity_level,
+              updated_at     = excluded.updated_at$$,
+    'user A can upsert their existing profile under RLS'
+);
+
 select is(
     public.test_affected_rows(
         $$update public.profiles
@@ -243,6 +275,28 @@ select is(
     ),
     0,
     'user A cannot delete user B goal'
+);
+
+select lives_ok(
+    $$insert into public.goals (
+          user_id,
+          goal_type,
+          target_pace,
+          daily_calories,
+          daily_protein,
+          daily_carbs,
+          daily_fat
+      )
+      values (
+          '11111111-1111-1111-1111-111111111111',
+          'maintenance',
+          null,
+          2100,
+          165,
+          230,
+          58
+      )$$,
+    'user A can insert a maintenance goal with no target pace'
 );
 
 select throws_ok(
