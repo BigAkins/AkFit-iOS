@@ -28,6 +28,7 @@ struct SettingsView: View {
     @State private var showDeleteAccountConfirm   = false
     @State private var isDeletingAccount          = false
     @State private var deleteAccountError: String? = nil
+    @State private var topBrandLogo = AkFitTopBrandLogoState()
 
     // MARK: - Body
 
@@ -46,6 +47,7 @@ struct SettingsView: View {
                 healthSection
                 exitOrSignOutSection
             }
+            .akfitTracksTopBrandLogoScroll(topBrandLogo)
             .onAppear {
                 healthKit.checkAuthorization()
                 Task { await notifications.checkAuthorization() }
@@ -100,6 +102,7 @@ struct SettingsView: View {
                 Text("This will permanently delete your account and all associated data — food logs, weight history, targets, and notes. This cannot be undone.")
             }
         }
+        .akfitTopBrandLogo(topBrandLogo)
     }
 
     // MARK: - Account section

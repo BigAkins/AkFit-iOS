@@ -68,6 +68,7 @@ struct SearchView: View {
     /// keyboard Search). Reset to `false` on every manual keystroke. Controls
     /// whether the "No results" message shows (only after a real search attempt).
     @State private var hasSearchedCurrentQuery = false
+    @State private var topBrandLogo = AkFitTopBrandLogoState()
 
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
@@ -211,6 +212,7 @@ struct SearchView: View {
                 scannedFood = item
             }
         }
+        .akfitTopBrandLogo(topBrandLogo)
     }
 
     // MARK: - Daily summary
@@ -269,6 +271,7 @@ struct SearchView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .akfitTracksTopBrandLogoScroll(topBrandLogo)
     }
 
     // MARK: - Grocery list section
@@ -379,6 +382,7 @@ struct SearchView: View {
             }
         }
         .listStyle(.insetGrouped)
+        .akfitTracksTopBrandLogoScroll(topBrandLogo)
     }
 
     // MARK: - Shared food row + navigation

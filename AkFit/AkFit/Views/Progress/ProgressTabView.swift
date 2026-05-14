@@ -51,6 +51,7 @@ struct ProgressTabView: View {
     @State private var selectedRange: HistoryRange = .week
     @State private var selectedDate  = Calendar.current.startOfDay(for: Date())
     @State private var showWeightLog = false
+    @State private var topBrandLogo = AkFitTopBrandLogoState()
 
     // MARK: - Derived state
 
@@ -126,6 +127,7 @@ struct ProgressTabView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 32)
             }
+            .akfitTracksTopBrandLogoScroll(topBrandLogo)
             .navigationTitle("Progress")
             .refreshable {
                 if let userId = authManager.currentUserId {
@@ -140,6 +142,7 @@ struct ProgressTabView: View {
                     .presentationDetents([.medium])
             }
         }
+        .akfitTopBrandLogo(topBrandLogo)
         // Re-run whenever the selected range changes: fetch the new window and
         // reset the selected day back to today so the detail card stays valid.
         .task(id: selectedRange) {
