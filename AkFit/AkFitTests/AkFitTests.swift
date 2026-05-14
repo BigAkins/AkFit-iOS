@@ -209,6 +209,79 @@ struct DaySummaryTests {
     }
 }
 
+// MARK: - LogDateContext tests
+
+struct LogDateContextTests {
+    private static var utcCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }
+
+    @Test func isToday_treatsNilAndSameDayAsToday() {
+        let now = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 14, hour: 14, minute: 35, second: 22
+        ))!
+        let sameDay = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 14, hour: 8
+        ))!
+
+        #expect(LogDateContext.isToday(nil, now: now, calendar: Self.utcCalendar))
+        #expect(LogDateContext.isToday(sameDay, now: now, calendar: Self.utcCalendar))
+        #expect(!LogDateContext.isBackfill(sameDay, now: now, calendar: Self.utcCalendar))
+    }
+
+    @Test func resolvedLoggedAt_combinesPastDayWithCurrentTime() {
+        let now = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 14, hour: 14, minute: 35, second: 22
+        ))!
+        let selectedDay = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 12, hour: 8
+        ))!
+
+        let resolved = LogDateContext.resolvedLoggedAt(
+            for: selectedDay,
+            now: now,
+            calendar: Self.utcCalendar
+        )
+        let parts = Self.utcCalendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: resolved)
+
+        #expect(parts.year == 2026)
+        #expect(parts.month == 5)
+        #expect(parts.day == 12)
+        #expect(parts.hour == 14)
+        #expect(parts.minute == 35)
+        #expect(parts.second == 22)
+    }
+
+    @Test func resolvedLoggedAt_preservesTodayAndClampsFutureDatesToNow() {
+        let now = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 14, hour: 14, minute: 35, second: 22
+        ))!
+        let today = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 14, hour: 8
+        ))!
+        let future = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 16, hour: 8
+        ))!
+
+        #expect(LogDateContext.resolvedLoggedAt(for: nil, now: now, calendar: Self.utcCalendar) == now)
+        #expect(LogDateContext.resolvedLoggedAt(for: today, now: now, calendar: Self.utcCalendar) == now)
+        #expect(LogDateContext.resolvedLoggedAt(for: future, now: now, calendar: Self.utcCalendar) == now)
+    }
+
+    @Test func loggingText_formatsDateContext() {
+        let date = Self.utcCalendar.date(from: DateComponents(
+            year: 2026, month: 5, day: 12, hour: 12
+        ))!
+
+        #expect(LogDateContext.loggingText(
+            for: date,
+            locale: Locale(identifier: "en_US_POSIX")
+        ) == "Logging for Tue, May 12")
+    }
+}
+
 // MARK: - UserProfile computed property tests
 
 struct UserProfileTests {

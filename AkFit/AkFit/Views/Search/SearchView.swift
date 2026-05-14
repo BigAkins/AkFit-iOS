@@ -85,21 +85,12 @@ struct SearchView: View {
     private let suggestionService = SupabaseFoodSearchService()
 
     private var isBackfillingLog: Bool {
-        guard let activeLogDate else { return false }
-        return !Calendar.current.isDateInToday(activeLogDate)
+        LogDateContext.isBackfill(activeLogDate)
     }
 
-    private var activeLogDateLabel: String {
-        guard let activeLogDate else { return "" }
-        return Self.logDateFormatter.string(from: activeLogDate)
+    private var activeLogDateText: String {
+        LogDateContext.loggingText(for: activeLogDate)
     }
-
-    private static let logDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = .current
-        f.setLocalizedDateFormatFromTemplate("EEE MMM d")
-        return f
-    }()
 
     var body: some View {
         NavigationStack(path: $foodPath) {
@@ -298,7 +289,7 @@ struct SearchView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "calendar")
                         .font(.footnote.weight(.semibold))
-                    Text("Logging for \(activeLogDateLabel)")
+                    Text(activeLogDateText)
                         .font(.subheadline.weight(.semibold))
                     Spacer()
                 }
@@ -494,17 +485,7 @@ struct SearchView: View {
     }
 
     private func resolvedLoggedAt(for logDate: Date?) -> Date {
-        let now = Date()
-        guard let logDate, !Calendar.current.isDateInToday(logDate) else { return now }
-        let cal = Calendar.current
-        let day = cal.startOfDay(for: logDate)
-        let time = cal.dateComponents([.hour, .minute, .second], from: now)
-        return cal.date(
-            bySettingHour: time.hour ?? 12,
-            minute: time.minute ?? 0,
-            second: time.second ?? 0,
-            of: day
-        ) ?? day
+        LogDateContext.resolvedLoggedAt(for: logDate)
     }
 
     @ViewBuilder

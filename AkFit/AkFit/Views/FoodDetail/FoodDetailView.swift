@@ -46,38 +46,19 @@ struct FoodDetailView: View {
 
     /// `true` when the user is back-filling a past day from the Dashboard.
     private var isPastDayLog: Bool {
-        guard let logDate else { return false }
-        return !Calendar.current.isDateInToday(logDate)
+        LogDateContext.isBackfill(logDate)
     }
 
     /// Display label for the past-day banner — e.g. "Tue, May 12".
-    private var pastDayLabel: String {
-        guard let logDate else { return "" }
-        return Self.pastDayFormatter.string(from: logDate)
+    private var pastDayText: String {
+        LogDateContext.loggingText(for: logDate)
     }
-
-    private static let pastDayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = .current
-        f.setLocalizedDateFormatFromTemplate("EEE MMM d")
-        return f
-    }()
 
     /// Combines the selected day with the current time-of-day so back-filled
     /// entries appear at a meaningful time within that day. Today path
     /// (`logDate == nil` or matches today) returns `Date()` unchanged.
     private func resolvedLoggedAt() -> Date {
-        let now = Date()
-        guard let logDate, !Calendar.current.isDateInToday(logDate) else { return now }
-        let cal = Calendar.current
-        let day = cal.startOfDay(for: logDate)
-        let time = cal.dateComponents([.hour, .minute, .second], from: now)
-        return cal.date(
-            bySettingHour: time.hour ?? 12,
-            minute: time.minute ?? 0,
-            second: time.second ?? 0,
-            of: day
-        ) ?? day
+        LogDateContext.resolvedLoggedAt(for: logDate)
     }
 
     // MARK: - Scaled nutrition
@@ -140,7 +121,7 @@ struct FoodDetailView: View {
                     HStack(spacing: 8) {
                         Image(systemName: "calendar")
                             .font(.footnote.weight(.semibold))
-                        Text("Logging for \(pastDayLabel)")
+                        Text(pastDayText)
                             .font(.subheadline.weight(.semibold))
                         Spacer()
                     }
@@ -581,6 +562,7 @@ private extension Double {
     .environment(auth)
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("Default serving") {
@@ -602,6 +584,7 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("High fat food") {
@@ -623,6 +606,7 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("Packaged / no gram weight") {
@@ -644,4 +628,5 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
