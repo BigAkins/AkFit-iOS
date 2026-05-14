@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct SearchFoodDetailRoute: Hashable {
+    let food: FoodItem
+    let logDate: Date?
+}
+
 /// Food search screen — the entry point for the logging loop.
 ///
 /// Reachable directly via the Search tab or by tapping the dashboard FAB
@@ -29,11 +34,15 @@ struct SearchView: View {
     @State private var searchTask: Task<Void, Never>? = nil
     @State private var showScanner = false
     /// Root-stack path for food detail pushes from rows and barcode scans.
-    @State private var foodPath: [FoodItem] = []
+    @State private var foodPath: [SearchFoodDetailRoute] = []
     /// Staging area: holds the scanned food until the scanner cover fully dismisses,
     /// then appends it to `foodPath` via `onDismiss`. This ensures the navigation
     /// push happens after the cover animation completes — no overlapping transitions.
     @State private var pendingScannedFood: FoodItem? = nil
+    /// Captured target day for the active Dashboard-launched logging flow.
+    /// The router hand-off is cleared as soon as Search consumes it, so direct
+    /// Search tab entry cannot inherit a stale past-day target.
+    @State private var activeLogDate: Date? = nil
     /// The log entry currently shown in the confirmation banner. Nil hides the banner.
     @State private var bannerEntry: FoodLog? = nil
     @State private var autoDismissTask: Task<Void, Never>? = nil
@@ -74,6 +83,23 @@ struct SearchView: View {
     private let searchService: any FoodSearchService = HybridFoodSearchService()
     /// Used exclusively to populate the empty-state suggestions from Supabase.
     private let suggestionService = SupabaseFoodSearchService()
+
+    private var isBackfillingLog: Bool {
+        guard let activeLogDate else { return false }
+        return !Calendar.current.isDateInToday(activeLogDate)
+    }
+
+    private var activeLogDateLabel: String {
+        guard let activeLogDate else { return "" }
+        return Self.logDateFormatter.string(from: activeLogDate)
+    }
+
+    private static let logDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = .current
+        f.setLocalizedDateFormatFromTemplate("EEE MMM d")
+        return f
+    }()
 
     var body: some View {
         NavigationStack(path: $foodPath) {
@@ -123,14 +149,18 @@ struct SearchView: View {
                     .accessibilityLabel("Scan barcode")
                 }
             }
-            .navigationDestination(for: FoodItem.self) { food in
-                FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
+            .navigationDestination(for: SearchFoodDetailRoute.self) { route in
+                FoodDetailView(
+                    food: route.food,
+                    initialQuantity: logStore.lastQuantity(for: route.food) ?? 1.0,
+                    logDate: route.logDate
+                )
             }
             .fullScreenCover(isPresented: $showScanner, onDismiss: {
                 // Promote the pending food to the navigation path only after the cover
                 // has fully dismissed, keeping the navigation push clean.
                 if let pendingScannedFood {
-                    foodPath.append(pendingScannedFood)
+                    foodPath.append(foodDetailRoute(for: pendingScannedFood))
                 }
                 pendingScannedFood = nil
             }) {
@@ -213,15 +243,23 @@ struct SearchView: View {
             .onChange(of: router.pendingScannedItem) { _, newItem in
                 guard let item = newItem else { return }
                 router.pendingScannedItem = nil
-                foodPath.append(item)
+                foodPath.append(foodDetailRoute(for: item))
             }
             .onChange(of: foodPath) { _, _ in
                 updateTopBrandLogoRootState()
+            }
+            .onChange(of: router.selectedTab) { _, newTab in
+                if newTab == .search {
+                    consumePendingLogDateIfNeeded()
+                } else {
+                    cancelActiveLoggingFlow()
+                }
             }
             .onChange(of: isSearchFieldActive) {
                 updateTopBrandLogoRootState()
             }
             .onAppear {
+                consumePendingLogDateIfNeeded()
                 updateTopBrandLogoRootState()
             }
         }
@@ -253,12 +291,33 @@ struct SearchView: View {
         }
     }
 
+    @ViewBuilder
+    private var loggingDateSection: some View {
+        if isBackfillingLog {
+            Section {
+                HStack(spacing: 8) {
+                    Image(systemName: "calendar")
+                        .font(.footnote.weight(.semibold))
+                    Text("Logging for \(activeLogDateLabel)")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                }
+                .foregroundStyle(.primary)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 4, trailing: 16))
+                .accessibilityElement(children: .combine)
+            }
+        }
+    }
+
     // MARK: - View states
 
     /// Shown when the search field is empty.
     /// Order: summary → Favorites → Recent → Grocery List → Suggestions.
     private var promptView: some View {
         List {
+            loggingDateSection
             summarySection
             if !favStore.favorites.isEmpty {
                 Section("Favorites") {
@@ -387,6 +446,7 @@ struct SearchView: View {
 
     private var resultsList: some View {
         List {
+            loggingDateSection
             summarySection
             Section("\(results.count) result\(results.count == 1 ? "" : "s")") {
                 ForEach(results) { food in
@@ -407,9 +467,49 @@ struct SearchView: View {
         topBrandLogo.setRootScreenActive(isEmptyInactiveSearchRoot)
     }
 
+    private func consumePendingLogDateIfNeeded() {
+        if let pendingLogDate = router.consumePendingLogDate() {
+            activeLogDate = pendingLogDate
+        }
+    }
+
+    private func cancelActiveLoggingFlow() {
+        if activeLogDate != nil {
+            foodPath.removeAll()
+        }
+        activeLogDate = nil
+        router.clearPendingLogDate()
+    }
+
+    private func finishSuccessfulLog(backfilling: Bool) {
+        activeLogDate = nil
+        router.clearPendingLogDate()
+        if backfilling {
+            router.selectedTab = .dashboard
+        }
+    }
+
+    private func foodDetailRoute(for food: FoodItem) -> SearchFoodDetailRoute {
+        SearchFoodDetailRoute(food: food, logDate: activeLogDate)
+    }
+
+    private func resolvedLoggedAt(for logDate: Date?) -> Date {
+        let now = Date()
+        guard let logDate, !Calendar.current.isDateInToday(logDate) else { return now }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: logDate)
+        let time = cal.dateComponents([.hour, .minute, .second], from: now)
+        return cal.date(
+            bySettingHour: time.hour ?? 12,
+            minute: time.minute ?? 0,
+            second: time.second ?? 0,
+            of: day
+        ) ?? day
+    }
+
     @ViewBuilder
     private func foodLink(_ food: FoodItem) -> some View {
-        NavigationLink(value: food) {
+        NavigationLink(value: foodDetailRoute(for: food)) {
             FoodRow(food: food)
         }
     }
@@ -456,14 +556,30 @@ struct SearchView: View {
         guard !isQuickLogging, let userId = authManager.currentUserId else { return }
         let food = fav.asFoodItem()
         let qty  = logStore.lastQuantity(for: food) ?? 1.0
+        let logDate = activeLogDate
+        let backfilling = isBackfillingLog
         isQuickLogging = true
         Task {
             defer { isQuickLogging = false }
-            try? await logStore.insert(food: food, quantity: qty, mealSlot: .inferred(), for: userId)
-            if let entry = logStore.lastLoggedEntry {
-                await healthKit.exportFoodLog(entry)
+            do {
+                try await logStore.insert(
+                    food: food,
+                    quantity: qty,
+                    mealSlot: .inferred(),
+                    for: userId,
+                    loggedAt: resolvedLoggedAt(for: logDate)
+                )
+                if let entry = logStore.lastLoggedEntry {
+                    await healthKit.exportFoodLog(entry)
+                }
+                if backfilling {
+                    logStore.clearLastLog()
+                }
+                notifications.cancelTodayReminder()
+                finishSuccessfulLog(backfilling: backfilling)
+            } catch {
+                // Preserve the existing silent quick-log failure behavior.
             }
-            notifications.cancelTodayReminder()
         }
     }
 
@@ -474,19 +590,30 @@ struct SearchView: View {
     /// original log) since the user is logging this food right now.
     private func quickLog(_ log: FoodLog) {
         guard !isQuickLogging, let userId = authManager.currentUserId else { return }
+        let logDate = activeLogDate
+        let backfilling = isBackfillingLog
         isQuickLogging = true
         Task {
             defer { isQuickLogging = false }
-            try? await logStore.insert(
-                food:     log.asFoodItem(),
-                quantity: log.quantity,
-                mealSlot: .inferred(),
-                for:      userId
-            )
-            if let entry = logStore.lastLoggedEntry {
-                await healthKit.exportFoodLog(entry)
+            do {
+                try await logStore.insert(
+                    food:     log.asFoodItem(),
+                    quantity: log.quantity,
+                    mealSlot: .inferred(),
+                    for:      userId,
+                    loggedAt: resolvedLoggedAt(for: logDate)
+                )
+                if let entry = logStore.lastLoggedEntry {
+                    await healthKit.exportFoodLog(entry)
+                }
+                if backfilling {
+                    logStore.clearLastLog()
+                }
+                notifications.cancelTodayReminder()
+                finishSuccessfulLog(backfilling: backfilling)
+            } catch {
+                // Preserve the existing silent quick-log failure behavior.
             }
-            notifications.cancelTodayReminder()
         }
     }
 
