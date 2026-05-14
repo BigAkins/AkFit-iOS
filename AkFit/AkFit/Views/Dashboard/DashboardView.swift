@@ -32,6 +32,7 @@ struct DashboardView: View {
     @State private var showNoteEditor  = false
     /// Currently-displayed day. Normalised to start-of-day (device-local).
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
+    @State private var topBrandLogo = AkFitTopBrandLogoState()
 
     /// Logs that match `selectedDate`. When viewing today, mirrors
     /// `FoodLogStore.todayLogs` so Search-tab inserts surface immediately.
@@ -261,6 +262,7 @@ struct DashboardView: View {
                 .navigationTitle(navigationTitleText)
                 // Bottom inset keeps the last row visible above the tab bar + FAB.
                 .safeAreaInset(edge: .bottom) { Color.clear.frame(height: 80) }
+                .akfitTracksTopBrandLogoScroll(topBrandLogo)
                 .refreshable {
                     await refreshDayData()
                 }
@@ -296,6 +298,10 @@ struct DashboardView: View {
             .padding(.trailing, 24)
             .padding(.bottom, 16)
         }
+        // Subtle AkFit brand mark in the otherwise-empty compact nav-bar zone
+        // above the large "Today" title. Scroll state is shared with the List
+        // tracker so behavior stays identical across screens.
+        .akfitTopBrandLogo(topBrandLogo)
     }
 
     // MARK: - Greeting
