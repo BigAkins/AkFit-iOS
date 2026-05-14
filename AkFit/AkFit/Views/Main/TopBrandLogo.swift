@@ -1,31 +1,40 @@
 import SwiftUI
 
+private enum AkFitTopBrandLogoMetrics {
+    static let topTolerance: CGFloat = 2
+    static let dragMinimumDistance: CGFloat = 8
+}
+
 @Observable
 final class AkFitTopBrandLogoState {
-    private static let topTolerance: CGFloat = 2
-
     private var isAtTop = true
-    private var isScrollIdle = true
+    private var isRootScreenActive = true
+    private var isScrollMovementActive = false
     private var hasUserStartedScrollingAwayFromTop = false
 
     var isVisible: Bool {
-        isAtTop && isScrollIdle && !hasUserStartedScrollingAwayFromTop
+        isRootScreenActive && isAtTop && !isScrollMovementActive && !hasUserStartedScrollingAwayFromTop
     }
 
-    func updateScrollOffset(_ offsetY: CGFloat) {
-        isAtTop = offsetY <= Self.topTolerance
+    func setRootScreenActive(_ isActive: Bool) {
+        isRootScreenActive = isActive
+    }
+
+    func updateScrollDistanceFromTop(_ distanceFromTop: CGFloat) {
+        isAtTop = distanceFromTop <= AkFitTopBrandLogoMetrics.topTolerance
 
         if !isAtTop {
             hasUserStartedScrollingAwayFromTop = true
-        } else if isScrollIdle {
+        } else if !isScrollMovementActive {
             hasUserStartedScrollingAwayFromTop = false
         }
     }
 
     func updateScrollPhase(_ phase: ScrollPhase) {
-        isScrollIdle = phase == .idle
+        let isMoving = phase == .interacting || phase == .decelerating
+        isScrollMovementActive = isMoving
 
-        if phase.isScrolling {
+        if isMoving {
             hasUserStartedScrollingAwayFromTop = true
         } else if isAtTop {
             hasUserStartedScrollingAwayFromTop = false
@@ -37,10 +46,15 @@ final class AkFitTopBrandLogoState {
     }
 
     func userEndedDragging() {
-        if isAtTop && isScrollIdle {
+        if isAtTop && !isScrollMovementActive {
             hasUserStartedScrollingAwayFromTop = false
         }
     }
+}
+
+private struct AkFitTopBrandLogoScrollPosition: Equatable {
+    let rawOffsetY: CGFloat
+    let adjustedTopOffsetY: CGFloat
 }
 
 private struct AkFitTopBrandLogoModifier: ViewModifier {
@@ -68,19 +82,33 @@ private struct AkFitTopBrandLogoModifier: ViewModifier {
 
 private struct AkFitTopBrandLogoScrollTrackingModifier: ViewModifier {
     let state: AkFitTopBrandLogoState
+    @State private var topContentOffsetY: CGFloat?
 
     func body(content: Content) -> some View {
         content
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                max(0, geometry.contentOffset.y + geometry.contentInsets.top)
+            .onScrollGeometryChange(for: AkFitTopBrandLogoScrollPosition.self) { geometry in
+                AkFitTopBrandLogoScrollPosition(
+                    rawOffsetY: geometry.contentOffset.y,
+                    adjustedTopOffsetY: geometry.contentOffset.y + geometry.contentInsets.top
+                )
             } action: { _, newOffset in
-                state.updateScrollOffset(newOffset)
+                if topContentOffsetY == nil {
+                    topContentOffsetY = newOffset.rawOffsetY
+                }
+
+                if abs(newOffset.adjustedTopOffsetY) <= AkFitTopBrandLogoMetrics.topTolerance {
+                    topContentOffsetY = min(topContentOffsetY ?? newOffset.rawOffsetY, newOffset.rawOffsetY)
+                }
+
+                let topOffset = topContentOffsetY ?? newOffset.rawOffsetY
+                let distanceFromTop = max(0, newOffset.rawOffsetY - topOffset)
+                state.updateScrollDistanceFromTop(distanceFromTop)
             }
             .onScrollPhaseChange { _, newPhase in
                 state.updateScrollPhase(newPhase)
             }
             .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
+                DragGesture(minimumDistance: AkFitTopBrandLogoMetrics.dragMinimumDistance)
                     .onChanged { _ in state.userStartedDragging() }
                     .onEnded { _ in state.userEndedDragging() }
             )

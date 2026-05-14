@@ -28,10 +28,10 @@ struct SearchView: View {
     @State private var isSearching = false
     @State private var searchTask: Task<Void, Never>? = nil
     @State private var showScanner = false
-    /// Set when a barcode scan resolves to a food item. Triggers navigation to `FoodDetailView`.
-    @State private var scannedFood: FoodItem? = nil
+    /// Root-stack path for food detail pushes from rows and barcode scans.
+    @State private var foodPath: [FoodItem] = []
     /// Staging area: holds the scanned food until the scanner cover fully dismisses,
-    /// then promotes it to `scannedFood` via `onDismiss`. This ensures the navigation
+    /// then appends it to `foodPath` via `onDismiss`. This ensures the navigation
     /// push happens after the cover animation completes — no overlapping transitions.
     @State private var pendingScannedFood: FoodItem? = nil
     /// The log entry currently shown in the confirmation banner. Nil hides the banner.
@@ -45,6 +45,7 @@ struct SearchView: View {
     @Environment(HealthKitService.self)     private var healthKit
     @Environment(NotificationService.self)  private var notifications
     @Environment(AppRouter.self)            private var router
+    @Environment(\.isSearching)             private var isSearchFieldActive
 
     @State private var newGroceryItem: String = ""
     /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
@@ -75,7 +76,7 @@ struct SearchView: View {
     private let suggestionService = SupabaseFoodSearchService()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $foodPath) {
             Group {
                 let q = query.trimmingCharacters(in: .whitespaces)
                 if q.isEmpty {
@@ -122,13 +123,15 @@ struct SearchView: View {
                     .accessibilityLabel("Scan barcode")
                 }
             }
-            .navigationDestination(item: $scannedFood) { food in
+            .navigationDestination(for: FoodItem.self) { food in
                 FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
             }
             .fullScreenCover(isPresented: $showScanner, onDismiss: {
-                // Promote the pending food to scannedFood only after the cover
+                // Promote the pending food to the navigation path only after the cover
                 // has fully dismissed, keeping the navigation push clean.
-                scannedFood = pendingScannedFood
+                if let pendingScannedFood {
+                    foodPath.append(pendingScannedFood)
+                }
                 pendingScannedFood = nil
             }) {
                 BarcodeScannerView { food in
@@ -136,6 +139,7 @@ struct SearchView: View {
                 }
             }
             .onChange(of: query) {
+                defer { updateTopBrandLogoRootState() }
                 // If a search was just committed (suggestion tap), the query
                 // change is programmatic — skip suggestion logic entirely.
                 if hasCommitted {
@@ -209,7 +213,16 @@ struct SearchView: View {
             .onChange(of: router.pendingScannedItem) { _, newItem in
                 guard let item = newItem else { return }
                 router.pendingScannedItem = nil
-                scannedFood = item
+                foodPath.append(item)
+            }
+            .onChange(of: foodPath) { _, _ in
+                updateTopBrandLogoRootState()
+            }
+            .onChange(of: isSearchFieldActive) {
+                updateTopBrandLogoRootState()
+            }
+            .onAppear {
+                updateTopBrandLogoRootState()
             }
         }
         .akfitTopBrandLogo(topBrandLogo)
@@ -387,11 +400,16 @@ struct SearchView: View {
 
     // MARK: - Shared food row + navigation
 
+    private func updateTopBrandLogoRootState() {
+        let isEmptyInactiveSearchRoot = foodPath.isEmpty
+            && !isSearchFieldActive
+            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        topBrandLogo.setRootScreenActive(isEmptyInactiveSearchRoot)
+    }
+
     @ViewBuilder
     private func foodLink(_ food: FoodItem) -> some View {
-        NavigationLink {
-            FoodDetailView(food: food, initialQuantity: logStore.lastQuantity(for: food) ?? 1.0)
-        } label: {
+        NavigationLink(value: food) {
             FoodRow(food: food)
         }
     }
