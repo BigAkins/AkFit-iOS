@@ -256,12 +256,26 @@ final class FoodLogStore {
 
     // MARK: - Insert
 
-    func insert(food: FoodItem, quantity: Double, mealSlot: MealSlot, for userId: UUID) async throws {
+    /// Inserts a food log. When `loggedAt` is omitted (the common case) the
+    /// entry is stamped with the current device time and lands on today. Pass
+    /// a date in the past to back-fill — used by Dashboard's day-history
+    /// navigation flow. Future dates are clamped to today since the
+    /// Dashboard never exposes a future selectedDate.
+    func insert(
+        food: FoodItem,
+        quantity: Double,
+        mealSlot: MealSlot,
+        for userId: UUID,
+        loggedAt: Date = Date()
+    ) async throws {
         let calories = Int((Double(food.calories) * quantity).rounded())
         let proteinG = food.proteinG * quantity
         let carbsG   = food.carbsG   * quantity
         let fatG     = food.fatG     * quantity
         let now      = Date()
+        // Guard: never accept a future `loggedAt` from a caller. Falls back
+        // to "now" if a caller misuses the API.
+        let safeLoggedAt = loggedAt > now ? now : loggedAt
 
         // Guest path: create locally and persist to GuestDataStore.
         if let gs = guestStore, gs.isActive {
@@ -276,7 +290,7 @@ final class FoodLogStore {
                 carbsG:       carbsG,
                 fatG:         fatG,
                 mealSlot:     mealSlot,
-                loggedAt:     now,
+                loggedAt:     safeLoggedAt,
                 createdAt:    now
             )
             gs.appendFoodLog(log)
@@ -297,7 +311,7 @@ final class FoodLogStore {
             carbsG:       carbsG,
             fatG:         fatG,
             mealSlot:     mealSlot,
-            loggedAt:     now
+            loggedAt:     safeLoggedAt
         )
 
         let saved: FoodLog = try await SupabaseClientProvider.shared
@@ -311,10 +325,22 @@ final class FoodLogStore {
         updateInMemory(with: saved)
     }
 
-    /// Appends a saved log to all three in-memory lists and updates `lastLoggedEntry`.
+    /// Routes a freshly-saved log into the right in-memory lists based on its
+    /// `loggedAt` date. Past-day entries never contaminate `todayLogs` (and
+    /// therefore never inflate Today's Dashboard totals), but they do update
+    /// `dayLogs` if the Dashboard is currently viewing that day, and they
+    /// always update `recentFoods` and `lastLoggedEntry`.
     private func updateInMemory(with log: FoodLog) {
-        todayLogs.append(log)
+        let cal = Calendar.current
+
+        if cal.isDateInToday(log.loggedAt) {
+            todayLogs.append(log)
+        }
         weekLogs.append(log)
+
+        if let date = dayLogsDate, cal.isDate(date, inSameDayAs: log.loggedAt) {
+            dayLogs.append(log)
+        }
 
         var seen = Set<String>()
         recentFoods = ([log] + recentFoods)

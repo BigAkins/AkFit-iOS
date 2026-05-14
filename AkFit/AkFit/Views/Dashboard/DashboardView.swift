@@ -283,8 +283,16 @@ struct DashboardView: View {
                 }
             }
 
-            // Floating add button — jumps directly to the Search tab.
+            // Floating add button — jumps directly to the Search tab. When
+            // the user is viewing a past day, hand the date off via the
+            // router so Search/FoodDetail can log into that day instead of
+            // today. Today (default) keeps `pendingLogDate = nil`.
             Button {
+                if isViewingToday {
+                    router.clearPendingLogDate()
+                } else {
+                    router.pendingLogDate = selectedDate
+                }
                 router.selectedTab = .search
             } label: {
                 Image(systemName: "plus")

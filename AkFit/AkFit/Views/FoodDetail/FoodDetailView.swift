@@ -14,6 +14,10 @@ import SwiftUI
 /// `DashboardView` re-renders automatically via Observation — no manual refresh needed.
 struct FoodDetailView: View {
     let food: FoodItem
+    /// Target day for the log. `nil` (the default) means today — preserves
+    /// the original behavior for every call site that doesn't opt in.
+    /// Past-day logging from the Dashboard FAB sets this to the selected day.
+    let logDate: Date?
 
     @State private var quantity:               Double
     @State private var mealSlot:               MealSlot = MealSlot.inferred()
@@ -24,8 +28,9 @@ struct FoodDetailView: View {
     /// `initialQuantity` seeds the portion stepper on first render.
     /// Pass the user's last-used quantity for repeat foods; omit for new foods
     /// and the stepper defaults to 1 serving.
-    init(food: FoodItem, initialQuantity: Double = 1.0) {
+    init(food: FoodItem, initialQuantity: Double = 1.0, logDate: Date? = nil) {
         self.food     = food
+        self.logDate  = logDate
         self._quantity = State(initialValue: initialQuantity)
     }
 
@@ -34,7 +39,27 @@ struct FoodDetailView: View {
     @Environment(AuthManager.self)          private var authManager
     @Environment(HealthKitService.self)     private var healthKit
     @Environment(NotificationService.self)  private var notifications
+    @Environment(AppRouter.self)            private var router
     @Environment(\.dismiss)                 private var dismiss
+
+    // MARK: - Log-date helpers
+
+    /// `true` when the user is back-filling a past day from the Dashboard.
+    private var isPastDayLog: Bool {
+        LogDateContext.isBackfill(logDate)
+    }
+
+    /// Display label for the past-day banner — e.g. "Tue, May 12".
+    private var pastDayText: String {
+        LogDateContext.loggingText(for: logDate)
+    }
+
+    /// Combines the selected day with the current time-of-day so back-filled
+    /// entries appear at a meaningful time within that day. Today path
+    /// (`logDate == nil` or matches today) returns `Date()` unchanged.
+    private func resolvedLoggedAt() -> Date {
+        LogDateContext.resolvedLoggedAt(for: logDate)
+    }
 
     // MARK: - Scaled nutrition
 
@@ -55,7 +80,19 @@ struct FoodDetailView: View {
     /// environments without a seeded goal).
     private var afterLogSummary: DaySummary? {
         guard let goal = authManager.goal else { return nil }
-        var s = DaySummary.from(goal: goal, logs: logStore.todayLogs)
+        // When back-filling a past day, project against that day's logs so
+        // "After this log" reflects the day the entry actually lands on.
+        // Today path is unchanged: builds from `todayLogs` exactly as before.
+        let baseLogs: [FoodLog]
+        if isPastDayLog,
+           let date = logStore.dayLogsDate,
+           let logDate,
+           Calendar.current.isDate(date, inSameDayAs: logDate) {
+            baseLogs = logStore.dayLogs
+        } else {
+            baseLogs = logStore.todayLogs
+        }
+        var s = DaySummary.from(goal: goal, logs: baseLogs)
         // Project the current food at the currently-selected quantity.
         s.addConsumed(
             calories: scaledCalories,
@@ -75,6 +112,25 @@ struct FoodDetailView: View {
                     Text(brand)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                }
+
+                // Past-day banner — only when the user came from a Dashboard
+                // day that isn't today. Makes the back-fill date obvious so
+                // entries can't accidentally land on the wrong day.
+                if isPastDayLog {
+                    HStack(spacing: 8) {
+                        Image(systemName: "calendar")
+                            .font(.footnote.weight(.semibold))
+                        Text(pastDayText)
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color(.systemGray6))
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .accessibilityElement(children: .combine)
                 }
 
                 calorieMacroCard
@@ -306,14 +362,33 @@ struct FoodDetailView: View {
                 guard let userId = authManager.currentUserId else { return }
                 isLogging = true
                 logError  = nil
+                let backfilling = isPastDayLog
                 Task {
                     defer { isLogging = false }
                     do {
-                        try await logStore.insert(food: food, quantity: quantity, mealSlot: mealSlot, for: userId)
+                        try await logStore.insert(
+                            food: food,
+                            quantity: quantity,
+                            mealSlot: mealSlot,
+                            for: userId,
+                            loggedAt: resolvedLoggedAt()
+                        )
                         if let entry = logStore.lastLoggedEntry {
                             Task { await healthKit.exportFoodLog(entry) }
                         }
+                        if backfilling {
+                            logStore.clearLastLog()
+                        }
                         notifications.cancelTodayReminder()
+                        // Clear the routing hand-off so a later FAB tap from
+                        // Today doesn't accidentally re-use a stale past day.
+                        router.clearPendingLogDate()
+                        // After a past-day back-fill, return to Dashboard so
+                        // the user immediately sees the entry on that day.
+                        // Today flow keeps the existing dismiss-to-Search UX.
+                        if backfilling {
+                            router.selectedTab = .dashboard
+                        }
                         dismiss()
                     } catch {
                         logError = "Couldn't save. Please try again."
@@ -487,6 +562,7 @@ private extension Double {
     .environment(auth)
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("Default serving") {
@@ -508,6 +584,7 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("High fat food") {
@@ -529,6 +606,7 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }
 
 #Preview("Packaged / no gram weight") {
@@ -550,4 +628,5 @@ private extension Double {
     .environment(AuthManager(previewMode: true))
     .environment(HealthKitService())
     .environment(NotificationService())
+    .environment(AppRouter())
 }

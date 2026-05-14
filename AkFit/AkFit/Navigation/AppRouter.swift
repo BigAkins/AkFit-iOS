@@ -23,7 +23,21 @@ enum AppTab: Hashable {
 final class AppRouter {
     var selectedTab: AppTab = .dashboard
     /// Set when a barcode scan from the center nav action resolves to a food item.
-    /// `SearchView` watches this and promotes it to a local `scannedFood` navigation
+    /// `SearchView` watches this and promotes it to its local food navigation
     /// destination once the tab switch animation completes.
     var pendingScannedItem: FoodItem? = nil
+    /// Target day for the next food log. Set by `DashboardView` when the user
+    /// taps the FAB while viewing a past day; consumed by `SearchView` /
+    /// `FoodDetailView`. `nil` means "today" (the default for direct entries
+    /// to the Search tab or fresh launches).
+    var pendingLogDate: Date? = nil
+
+    func consumePendingLogDate() -> Date? {
+        defer { pendingLogDate = nil }
+        return pendingLogDate
+    }
+
+    func clearPendingLogDate() {
+        pendingLogDate = nil
+    }
 }
