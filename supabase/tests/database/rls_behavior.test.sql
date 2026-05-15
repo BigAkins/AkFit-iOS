@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public;
 
-select plan(30);
+select plan(39);
 
 create function public.test_affected_rows(sql text)
 returns int
@@ -125,6 +125,19 @@ values (
     '22222222-2222-2222-2222-222222222222',
     '2026-01-01',
     'User B note'
+);
+
+insert into public.water_entries (
+    id,
+    user_id,
+    amount_ml,
+    logged_at
+)
+values (
+    'dddddddd-2222-2222-2222-222222222222',
+    '22222222-2222-2222-2222-222222222222',
+    355,
+    '2026-01-01 12:00:00+00'
 );
 
 select set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
@@ -496,6 +509,96 @@ select is(
     ),
     1,
     'user A can delete their own daily note'
+);
+
+-- water_entries: event-style hydration rows are fully user-owned.
+select lives_ok(
+    $$insert into public.water_entries (
+          id,
+          user_id,
+          amount_ml,
+          logged_at
+      )
+      values (
+          'dddddddd-1111-1111-1111-111111111111',
+          '11111111-1111-1111-1111-111111111111',
+          473,
+          '2026-01-02 09:00:00+00'
+      )$$,
+    'user A can insert their own water entry'
+);
+
+select is(
+    (select count(*)::int from public.water_entries where user_id = '11111111-1111-1111-1111-111111111111'),
+    1,
+    'user A can read their own water entry'
+);
+
+select is(
+    (select count(*)::int from public.water_entries where user_id = '22222222-2222-2222-2222-222222222222'),
+    0,
+    'user A cannot read user B water entry'
+);
+
+select throws_ok(
+    $$insert into public.water_entries (
+          user_id,
+          amount_ml
+      )
+      values (
+          '22222222-2222-2222-2222-222222222222',
+          237
+      )$$,
+    '42501',
+    'new row violates row-level security policy for table "water_entries"',
+    'user A cannot insert a water entry for user B'
+);
+
+select is(
+    public.test_affected_rows(
+        $$update public.water_entries
+             set amount_ml = 500
+           where id = 'dddddddd-1111-1111-1111-111111111111'$$
+    ),
+    1,
+    'user A can update their own water entry'
+);
+
+select is(
+    public.test_affected_rows(
+        $$update public.water_entries
+             set amount_ml = 500
+           where id = 'dddddddd-2222-2222-2222-222222222222'$$
+    ),
+    0,
+    'user A cannot update user B water entry'
+);
+
+select throws_ok(
+    $$update public.water_entries
+         set user_id = '22222222-2222-2222-2222-222222222222'
+       where id = 'dddddddd-1111-1111-1111-111111111111'$$,
+    '42501',
+    'new row violates row-level security policy for table "water_entries"',
+    'user A cannot transfer water entry ownership'
+);
+
+select is(
+    public.test_affected_rows(
+        $$delete from public.water_entries
+           where id = 'dddddddd-2222-2222-2222-222222222222'$$
+    ),
+    0,
+    'user A cannot delete user B water entry'
+);
+
+select is(
+    public.test_affected_rows(
+        $$delete from public.water_entries
+           where id = 'dddddddd-1111-1111-1111-111111111111'$$
+    ),
+    1,
+    'user A can delete their own water entry'
 );
 
 reset role;

@@ -93,6 +93,7 @@ struct MainTabView: View {
         .environment(FoodLogStore())
         .environment(FavoriteFoodStore())
         .environment(BodyweightStore())
+        .environment(WaterStore())
         .environment(AppRouter())
         .environment(HealthKitService())
         .environment(NotificationService())

@@ -25,11 +25,13 @@ import SwiftUI
 struct DashboardView: View {
     @Environment(AuthManager.self)     private var authManager
     @Environment(FoodLogStore.self)    private var logStore
+    @Environment(WaterStore.self)      private var waterStore
     @Environment(DailyNoteStore.self)  private var noteStore
     @Environment(AppRouter.self)       private var router
 
-    @State private var showDeleteError = false
-    @State private var showNoteEditor  = false
+    @State private var showDeleteError    = false
+    @State private var showWaterAddError  = false
+    @State private var showNoteEditor     = false
     /// Currently-displayed day. Normalised to start-of-day (device-local).
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var topBrandLogo = AkFitTopBrandLogoState()
@@ -50,6 +52,18 @@ struct DashboardView: View {
 
     private var isViewingToday: Bool {
         Calendar.current.isDateInToday(selectedDate)
+    }
+
+    /// Total water (oz) for `selectedDate`. Mirrors the `displayedLogs`
+    /// stale-guard pattern: only surface the loaded total when the store's
+    /// `dayEntriesDate` actually matches the day being viewed, otherwise
+    /// the user could see yesterday's total flash while a fetch is in flight.
+    private var displayedWaterOz: Double {
+        guard let date = waterStore.dayEntriesDate,
+              Calendar.current.isDate(date, inSameDayAs: selectedDate) else {
+            return 0
+        }
+        return waterStore.totalOz
     }
 
     /// Targets from the active goal + consumed totals from `displayedLogs`.
@@ -121,6 +135,20 @@ struct DashboardView: View {
                                 .listRowBackground(Color(UIColor.systemBackground))
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
+
+                            // Lightweight water tracker — sits between macros and
+                            // the food sections so calories/macros stay visually
+                            // dominant but the daily total + quick-add stay one
+                            // glance away. Past-day logging is supported because
+                            // we hand `selectedDate` to `WaterStore.add`.
+                            WaterCard(
+                                totalOz: displayedWaterOz,
+                                isViewingToday: isViewingToday,
+                                onAdd: { amount in addWater(amountOz: amount) }
+                            )
+                            .listRowBackground(Color(UIColor.systemBackground))
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
                         }
                         .listSectionSeparator(.hidden)
 
@@ -277,6 +305,11 @@ struct DashboardView: View {
                     }
                 }
                 .alert("Couldn't remove entry", isPresented: $showDeleteError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("Please check your connection and try again.")
+                }
+                .alert("Couldn't add water", isPresented: $showWaterAddError) {
                     Button("OK", role: .cancel) {}
                 } message: {
                     Text("Please check your connection and try again.")
@@ -527,16 +560,41 @@ struct DashboardView: View {
 
     // MARK: - Day refresh
 
-    /// Loads the selected day's logs through `FoodLogStore`. Today also pulls
-    /// the daily note since the note section only renders on today.
+    /// Loads the selected day's logs through `FoodLogStore` and water entries
+    /// through `WaterStore`. Today also pulls the daily note since the note
+    /// section only renders on today. Concurrent fetches keep navigation snappy.
     private func refreshDayData() async {
         guard let userId = authManager.currentUserId else { return }
         if isViewingToday {
-            async let logs: Void = logStore.refreshDay(userId: userId, date: selectedDate)
-            async let note: Void = noteStore.fetchToday(userId: userId)
-            _ = await (logs, note)
+            async let logs:  Void = logStore.refreshDay(userId: userId, date: selectedDate)
+            async let note:  Void = noteStore.fetchToday(userId: userId)
+            async let water: Void = waterStore.refreshDay(userId: userId, date: selectedDate)
+            _ = await (logs, note, water)
         } else {
-            await logStore.refreshDay(userId: userId, date: selectedDate)
+            async let logs:  Void = logStore.refreshDay(userId: userId, date: selectedDate)
+            async let water: Void = waterStore.refreshDay(userId: userId, date: selectedDate)
+            _ = await (logs, water)
+        }
+    }
+
+    // MARK: - Water actions
+
+    /// Logs a water intake event for `selectedDate`. The store handles the
+    /// today-vs-backfill timestamp resolution via `LogDateContext`, so passing
+    /// `selectedDate` is enough — no view-side calendar gymnastics. Failures
+    /// surface a quiet alert instead of silently dropping the tap.
+    private func addWater(amountOz: Double) {
+        guard let userId = authManager.currentUserId else { return }
+        Task {
+            do {
+                try await waterStore.add(
+                    amountOz: amountOz,
+                    for: userId,
+                    date: selectedDate
+                )
+            } catch {
+                showWaterAddError = true
+            }
         }
     }
 }
@@ -672,6 +730,81 @@ private struct MacroCard: View {
         .padding(14)
         .background(Color(.systemGray6))
         .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+// MARK: - Water card
+
+/// Compact daily water-intake card showing the loaded day's total in US
+/// fluid ounces plus three quick-add buttons (+8 / +12 / +16). Matches the
+/// visual rhythm of `CalorieSummaryCard` / `MacroCard` (systemGray6 surface,
+/// rounded 14pt corners) so it slots into the summary stack without breaking
+/// the dashboard's existing look. Renders cleanly at 0 oz — no dramatic
+/// empty-state imagery, matching the water v0 scope.
+private struct WaterCard: View {
+    let totalOz: Double
+    let isViewingToday: Bool
+    let onAdd: (Double) -> Void
+
+    /// Whole-ounce readout. Quick-add increments are integers so the running
+    /// total is too — rounding here protects against minor floating-point
+    /// noise that the ml↔oz conversion can introduce.
+    private var totalLabel: String {
+        "\(Int(totalOz.rounded())) oz"
+    }
+
+    private var subtext: String {
+        isViewingToday ? "logged today" : "logged this day"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Water")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(subtext)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Text(totalLabel)
+                    .font(.title3.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .contentTransition(.numericText())
+                    .animation(.snappy, value: totalOz)
+            }
+
+            HStack(spacing: 8) {
+                quickAddButton(amount: 8)
+                quickAddButton(amount: 12)
+                quickAddButton(amount: 16)
+            }
+        }
+        .padding(16)
+        .background(Color(.systemGray6))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+    }
+
+    /// Pill-style quick-add button. Uses `systemGray5` so the control reads
+    /// as a "raised" element on the `systemGray6` card surface in both light
+    /// and dark mode (gray5 is slightly darker in light, slightly lighter in
+    /// dark — visible contrast either way).
+    private func quickAddButton(amount: Double) -> some View {
+        Button { onAdd(amount) } label: {
+            Text("+\(Int(amount))")
+                .font(.subheadline.weight(.semibold))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .background(Color(.systemGray5))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Add \(Int(amount)) ounces of water")
     }
 }
 
@@ -933,6 +1066,7 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: "Alex"))
         .environment(FoodLogStore(previewLogs: DashboardView.previewLogs))
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(AppRouter())
 }
@@ -941,6 +1075,7 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: nil))
         .environment(FoodLogStore())
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(AppRouter())
 }
@@ -949,6 +1084,7 @@ private extension DashboardView {
     DashboardView()
         .environment(DashboardView.previewAuth(displayName: "Alex", birthdateIsToday: true))
         .environment(FoodLogStore())
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(AppRouter())
 }

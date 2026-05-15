@@ -12,6 +12,7 @@ struct AkFitApp: App {
     @State private var logStore:      FoodLogStore
     @State private var favStore:      FavoriteFoodStore
     @State private var weightStore:   BodyweightStore
+    @State private var waterStore:    WaterStore
     @State private var noteStore:     DailyNoteStore
     @State private var groceryStore:  GroceryListStore
     @State private var router:        AppRouter
@@ -25,6 +26,7 @@ struct AkFitApp: App {
         _authManager   = State(initialValue: am)
         _logStore      = State(initialValue: FoodLogStore(guestStore: gs, authManager: am))
         _weightStore   = State(initialValue: BodyweightStore(guestStore: gs, authManager: am))
+        _waterStore    = State(initialValue: WaterStore(guestStore: gs, authManager: am))
         _noteStore     = State(initialValue: DailyNoteStore(guestStore: gs, authManager: am))
         _groceryStore  = State(initialValue: GroceryListStore(guestStore: gs, authManager: am))
         _favStore      = State(initialValue: FavoriteFoodStore(authManager: am))
@@ -41,6 +43,7 @@ struct AkFitApp: App {
                 .environment(logStore)
                 .environment(favStore)
                 .environment(weightStore)
+                .environment(waterStore)
                 .environment(noteStore)
                 .environment(groceryStore)
                 .environment(router)

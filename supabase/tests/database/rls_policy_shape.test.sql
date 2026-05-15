@@ -3,7 +3,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = extensions, public;
 
-select plan(10);
+select plan(11);
 
 select ok(
     to_regclass('public.user_goals') is null,
@@ -24,7 +24,8 @@ where n.nspname = 'public'
         'food_logs',
         'goals',
         'grocery_items',
-        'profiles'
+        'profiles',
+        'water_entries'
   )
   and c.relrowsecurity
 $$,
@@ -36,7 +37,8 @@ values
     ('food_logs'),
     ('goals'),
     ('grocery_items'),
-    ('profiles')
+    ('profiles'),
+    ('water_entries')
 $$,
 'user-scoped public tables keep RLS enabled'
 );
@@ -113,6 +115,18 @@ select policies_are(
     'profiles exposes only its expected policies'
 );
 
+select policies_are(
+    'public',
+    'water_entries',
+    array[
+        'water_entries: delete own',
+        'water_entries: insert own',
+        'water_entries: select own',
+        'water_entries: update own'
+    ],
+    'water_entries exposes only its expected policies'
+);
+
 select set_eq(
 $$
 select
@@ -130,7 +144,8 @@ where schemaname = 'public'
         'food_logs',
         'goals',
         'grocery_items',
-        'profiles'
+        'profiles',
+        'water_entries'
   )
 $$,
 $$
@@ -150,7 +165,11 @@ values
     ('grocery_items', 'Users manage own grocery items', 'ALL', '(auth.uid() = user_id)', '(auth.uid() = user_id)'),
     ('profiles', 'profiles: insert own', 'INSERT', '<null>', '(auth.uid() = id)'),
     ('profiles', 'profiles: select own', 'SELECT', '(auth.uid() = id)', '<null>'),
-    ('profiles', 'profiles: update own', 'UPDATE', '(auth.uid() = id)', '(auth.uid() = id)')
+    ('profiles', 'profiles: update own', 'UPDATE', '(auth.uid() = id)', '(auth.uid() = id)'),
+    ('water_entries', 'water_entries: delete own', 'DELETE', '(auth.uid() = user_id)', '<null>'),
+    ('water_entries', 'water_entries: insert own', 'INSERT', '<null>', '(auth.uid() = user_id)'),
+    ('water_entries', 'water_entries: select own', 'SELECT', '(auth.uid() = user_id)', '<null>'),
+    ('water_entries', 'water_entries: update own', 'UPDATE', '(auth.uid() = user_id)', '(auth.uid() = user_id)')
 $$,
 'user-scoped policies keep their expected USING and WITH CHECK shape'
 );
