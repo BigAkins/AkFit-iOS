@@ -14,6 +14,7 @@ struct SettingsView: View {
     @Environment(FoodLogStore.self)        private var logStore
     @Environment(FavoriteFoodStore.self)   private var favStore
     @Environment(BodyweightStore.self)     private var weightStore
+    @Environment(WaterStore.self)          private var waterStore
     @Environment(DailyNoteStore.self)      private var noteStore
     @Environment(GroceryListStore.self)    private var groceryStore
     @Environment(HealthKitService.self)    private var healthKit
@@ -556,6 +557,7 @@ struct SettingsView: View {
     private func exitGuestMode() {
         logStore.reset()
         weightStore.reset()
+        waterStore.reset()
         noteStore.reset()
         groceryStore.reset()
         authManager.exitGuestMode()
@@ -566,6 +568,7 @@ struct SettingsView: View {
         logStore.reset()
         favStore.reset()
         weightStore.reset()
+        waterStore.reset()
         noteStore.reset()
         groceryStore.reset()
     }
@@ -594,6 +597,7 @@ struct SettingsView: View {
         .environment(auth)
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(GroceryListStore())
         .environment(HealthKitService())
@@ -621,6 +625,7 @@ struct SettingsView: View {
         .environment(auth)
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(GroceryListStore())
         .environment(HealthKitService())
@@ -632,6 +637,7 @@ struct SettingsView: View {
         .environment(AuthManager(previewMode: true))
         .environment(FoodLogStore())
         .environment(BodyweightStore())
+        .environment(WaterStore())
         .environment(DailyNoteStore())
         .environment(GroceryListStore())
         .environment(HealthKitService())

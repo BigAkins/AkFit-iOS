@@ -22,9 +22,8 @@ enum AppUserState: Equatable {
 /// Owns all local UserDefaults persistence for guest mode.
 ///
 /// A single instance is created at app launch (`AkFitApp.init`) and injected
-/// into `AuthManager`, `FoodLogStore`, and `BodyweightStore` so they all
-/// share the same data. **All UserDefaults reads and writes for guest data
-/// happen exclusively here.**
+/// into `AuthManager` plus each logging store so they all share the same data.
+/// **All UserDefaults reads and writes for guest data happen exclusively here.**
 ///
 /// ## What is stored
 /// | Key                  | Value                                  |
@@ -35,6 +34,7 @@ enum AppUserState: Equatable {
 /// | `guest.profile`      | `UserProfile` set during onboarding    |
 /// | `guest.foodLogs`     | All `[FoodLog]` entries                |
 /// | `guest.bodyweightLogs` | All `[BodyweightLog]` entries        |
+/// | `guest.waterEntries`   | All `[WaterEntry]` entries           |
 ///
 /// ## Security
 /// No Supabase credentials, tokens, or session data are stored here.
@@ -52,6 +52,7 @@ final class GuestDataStore {
         static let profile        = "guest.profile"
         static let foodLogs       = "guest.foodLogs"
         static let bodyweightLogs = "guest.bodyweightLogs"
+        static let waterEntries   = "guest.waterEntries"
         static let dailyNotes     = "guest.dailyNotes"
         static let groceryItems   = "guest.groceryItems"
     }
@@ -108,6 +109,9 @@ final class GuestDataStore {
     /// All bodyweight entries for this guest, across all days.
     private(set) var allBodyweightLogs: [BodyweightLog]
 
+    /// All water intake entries for this guest, across all days.
+    private(set) var allWaterEntries: [WaterEntry]
+
     /// Daily notes for this guest, keyed by "yyyy-MM-dd" date string.
     private(set) var dailyNotes: [String: String]
 
@@ -137,6 +141,7 @@ final class GuestDataStore {
         // Load log arrays (default to empty if nothing persisted yet).
         self.allFoodLogs       = Self.load([FoodLog].self,         key: Keys.foodLogs)       ?? []
         self.allBodyweightLogs = Self.load([BodyweightLog].self,   key: Keys.bodyweightLogs) ?? []
+        self.allWaterEntries   = Self.load([WaterEntry].self,      key: Keys.waterEntries)   ?? []
 
         // Load planning data (default to empty).
         self.dailyNotes     = Self.load([String: String].self, key: Keys.dailyNotes)   ?? [:]
@@ -185,6 +190,18 @@ final class GuestDataStore {
     func deleteBodyweightLog(id: UUID) {
         allBodyweightLogs.removeAll { $0.id == id }
         persist(allBodyweightLogs, key: Keys.bodyweightLogs)
+    }
+
+    // MARK: - Water entry mutations
+
+    func appendWaterEntry(_ entry: WaterEntry) {
+        allWaterEntries.append(entry)
+        persist(allWaterEntries, key: Keys.waterEntries)
+    }
+
+    func deleteWaterEntry(id: UUID) {
+        allWaterEntries.removeAll { $0.id == id }
+        persist(allWaterEntries, key: Keys.waterEntries)
     }
 
     // MARK: - Daily note mutations
@@ -243,12 +260,13 @@ final class GuestDataStore {
         profile           = nil
         allFoodLogs       = []
         allBodyweightLogs = []
+        allWaterEntries   = []
         dailyNotes        = [:]
         allGroceryItems   = []
 
         for key in [Keys.isActive, Keys.goal, Keys.profile,
                     Keys.foodLogs, Keys.bodyweightLogs, Keys.guestId,
-                    Keys.dailyNotes, Keys.groceryItems] {
+                    Keys.waterEntries, Keys.dailyNotes, Keys.groceryItems] {
             defaults.removeObject(forKey: key)
         }
     }

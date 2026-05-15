@@ -282,6 +282,29 @@ struct LogDateContextTests {
     }
 }
 
+// MARK: - WaterEntry tests
+
+struct WaterEntryTests {
+    @Test func ounceHelpers_roundTripCommonServing() {
+        let milliliters = WaterEntry.milliliters(fromOunces: 16)
+
+        #expect(milliliters == 473)
+        #expect(abs(WaterEntry.ounces(fromMilliliters: milliliters) - 16) < 0.02)
+    }
+
+    @Test func waterStore_totalSumsLoadedDayEntries() {
+        let uid = UUID()
+        let now = Date()
+        let store = WaterStore(previewEntries: [
+            WaterEntry(id: UUID(), userId: uid, amountMl: 237, loggedAt: now, createdAt: now),
+            WaterEntry(id: UUID(), userId: uid, amountMl: 473, loggedAt: now, createdAt: now),
+        ])
+
+        #expect(store.totalMl == 710)
+        #expect(abs(store.totalOz - 24) < 0.03)
+    }
+}
+
 // MARK: - UserProfile computed property tests
 
 struct UserProfileTests {
