@@ -32,6 +32,7 @@ struct DashboardView: View {
     @State private var showDeleteError    = false
     @State private var showWaterAddError  = false
     @State private var showWaterUndoError = false
+    @State private var isUndoingWater     = false
     @State private var showNoteEditor     = false
     /// Currently-displayed day. Normalised to start-of-day (device-local).
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
@@ -158,6 +159,7 @@ struct DashboardView: View {
                                 totalOz: displayedWaterOz,
                                 isViewingToday: isViewingToday,
                                 canUndo: canUndoWater,
+                                isUndoing: isUndoingWater,
                                 onAdd: { amount in addWater(amountOz: amount) },
                                 onUndo: { undoLastWater() }
                             )
@@ -626,6 +628,7 @@ struct DashboardView: View {
     /// store's `delete` updates `dayEntries` synchronously so `displayedWaterOz`
     /// reflects the change without a refresh round-trip.
     private func undoLastWater() {
+        guard !isUndoingWater else { return }
         guard let date = waterStore.dayEntriesDate,
               Calendar.current.isDate(date, inSameDayAs: selectedDate) else {
             return
@@ -634,7 +637,9 @@ struct DashboardView: View {
                 .max(by: { $0.createdAt < $1.createdAt }) else {
             return
         }
+        isUndoingWater = true
         Task {
+            defer { isUndoingWater = false }
             do {
                 try await waterStore.delete(entryId: entry.id)
             } catch {
@@ -790,6 +795,7 @@ private struct WaterCard: View {
     let totalOz: Double
     let isViewingToday: Bool
     let canUndo: Bool
+    let isUndoing: Bool
     let onAdd: (Double) -> Void
     let onUndo: () -> Void
 
@@ -831,6 +837,7 @@ private struct WaterCard: View {
                                     .foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
+                            .disabled(isUndoing)
                             .accessibilityLabel("Undo last water entry")
                         }
                     }
