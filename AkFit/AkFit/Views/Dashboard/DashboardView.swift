@@ -31,6 +31,7 @@ struct DashboardView: View {
 
     @State private var showDeleteError    = false
     @State private var showWaterAddError  = false
+    @State private var showWaterUndoError = false
     @State private var showNoteEditor     = false
     /// Currently-displayed day. Normalised to start-of-day (device-local).
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
@@ -64,6 +65,18 @@ struct DashboardView: View {
             return 0
         }
         return waterStore.totalOz
+    }
+
+    /// True when the loaded water entries belong to `selectedDate` and at least
+    /// one exists — i.e. there is something to undo. Same stale-guard pattern
+    /// as `displayedWaterOz`: prevents the undo control from operating against
+    /// a previous day's entries while a fetch is in flight.
+    private var canUndoWater: Bool {
+        guard let date = waterStore.dayEntriesDate,
+              Calendar.current.isDate(date, inSameDayAs: selectedDate) else {
+            return false
+        }
+        return !waterStore.dayEntries.isEmpty
     }
 
     /// Targets from the active goal + consumed totals from `displayedLogs`.
@@ -144,7 +157,9 @@ struct DashboardView: View {
                             WaterCard(
                                 totalOz: displayedWaterOz,
                                 isViewingToday: isViewingToday,
-                                onAdd: { amount in addWater(amountOz: amount) }
+                                canUndo: canUndoWater,
+                                onAdd: { amount in addWater(amountOz: amount) },
+                                onUndo: { undoLastWater() }
                             )
                             .listRowBackground(Color(UIColor.systemBackground))
                             .listRowSeparator(.hidden)
@@ -310,6 +325,11 @@ struct DashboardView: View {
                     Text("Please check your connection and try again.")
                 }
                 .alert("Couldn't add water", isPresented: $showWaterAddError) {
+                    Button("OK", role: .cancel) {}
+                } message: {
+                    Text("Please check your connection and try again.")
+                }
+                .alert("Couldn't undo water", isPresented: $showWaterUndoError) {
                     Button("OK", role: .cancel) {}
                 } message: {
                     Text("Please check your connection and try again.")
@@ -597,6 +617,31 @@ struct DashboardView: View {
             }
         }
     }
+
+    /// Deletes the most recently-added water entry for `selectedDate`. Uses
+    /// `createdAt`-max rather than the array's `loggedAt`-sorted tail so cross-
+    /// session past-day backfills still target the entry the user just added
+    /// (a backfill row's `loggedAt` is the past day at current time, which can
+    /// land mid-sequence relative to entries logged on that day live). The
+    /// store's `delete` updates `dayEntries` synchronously so `displayedWaterOz`
+    /// reflects the change without a refresh round-trip.
+    private func undoLastWater() {
+        guard let date = waterStore.dayEntriesDate,
+              Calendar.current.isDate(date, inSameDayAs: selectedDate) else {
+            return
+        }
+        guard let entry = waterStore.dayEntries
+                .max(by: { $0.createdAt < $1.createdAt }) else {
+            return
+        }
+        Task {
+            do {
+                try await waterStore.delete(entryId: entry.id)
+            } catch {
+                showWaterUndoError = true
+            }
+        }
+    }
 }
 
 // MARK: - Calorie summary card
@@ -744,7 +789,9 @@ private struct MacroCard: View {
 private struct WaterCard: View {
     let totalOz: Double
     let isViewingToday: Bool
+    let canUndo: Bool
     let onAdd: (Double) -> Void
+    let onUndo: () -> Void
 
     /// Whole-ounce readout. Quick-add increments are integers so the running
     /// total is too — rounding here protects against minor floating-point
@@ -764,9 +811,29 @@ private struct WaterCard: View {
                     Text("Water")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text(subtext)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+
+                    // Subtext + inline "Undo" affordance. The undo control
+                    // lives here so the card's main shape (header + quick-add
+                    // row) stays unchanged when there's nothing to undo — no
+                    // ghost row, no shifting layout. Caption sizing keeps it
+                    // visually low-priority next to the total readout.
+                    HStack(spacing: 6) {
+                        Text(subtext)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                        if canUndo {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                            Button { onUndo() } label: {
+                                Text("Undo")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Undo last water entry")
+                        }
+                    }
                 }
                 Spacer()
                 Text(totalLabel)
