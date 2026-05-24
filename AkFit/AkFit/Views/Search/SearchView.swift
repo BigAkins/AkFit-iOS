@@ -31,6 +31,7 @@ struct SearchView: View {
     @State private var results: [FoodItem] = []
     @State private var suggestions: [FoodItem] = []
     @State private var isSearching = false
+    @State private var isSearchPresented = false
     @State private var searchTask: Task<Void, Never>? = nil
     @State private var showScanner = false
     /// Root-stack path for food detail pushes from rows and barcode scans.
@@ -92,6 +93,12 @@ struct SearchView: View {
         LogDateContext.loggingText(for: activeLogDate)
     }
 
+    private var isSearchActiveForBrandLogo: Bool {
+        isSearchPresented
+            || isSearchFieldActive
+            || !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         NavigationStack(path: $foodPath) {
             Group {
@@ -124,6 +131,7 @@ struct SearchView: View {
             .navigationTitle("Search")
             .searchable(
                 text: $query,
+                isPresented: $isSearchPresented,
                 placement: .navigationBarDrawer(displayMode: .always),
                 prompt: "Search food..."
             )
@@ -249,12 +257,15 @@ struct SearchView: View {
             .onChange(of: isSearchFieldActive) {
                 updateTopBrandLogoRootState()
             }
+            .onChange(of: isSearchPresented) {
+                updateTopBrandLogoRootState()
+            }
             .onAppear {
                 consumePendingLogDateIfNeeded()
                 updateTopBrandLogoRootState()
             }
         }
-        .akfitTopBrandLogo(topBrandLogo)
+        .akfitTopBrandLogo(topBrandLogo, isSuppressed: isSearchActiveForBrandLogo)
     }
 
     // MARK: - Daily summary
@@ -453,7 +464,7 @@ struct SearchView: View {
 
     private func updateTopBrandLogoRootState() {
         let isEmptyInactiveSearchRoot = foodPath.isEmpty
-            && !isSearchFieldActive
+            && !isSearchActiveForBrandLogo
             && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         topBrandLogo.setRootScreenActive(isEmptyInactiveSearchRoot)
     }
