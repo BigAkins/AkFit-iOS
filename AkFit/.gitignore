@@ -1,1 +1,7 @@
+# Sentry (local tooling, auth, and build artifacts — do not commit)
 .sentryclirc
+sentry-wizard
+sentry.properties
+.env.sentry-build-plugin
+.env.sentry-build-plugin.local
+.sentry/
