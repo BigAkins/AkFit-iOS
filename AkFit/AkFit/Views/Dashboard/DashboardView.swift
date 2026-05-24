@@ -759,8 +759,9 @@ private struct MacroRow: View {
         let total = pKcal + cKcal + fKcal
         guard total > 0 else { return (0, 0, 0) }
         let p = Int(((Double(pKcal) / Double(total)) * 100).rounded())
-        let c = Int(((Double(cKcal) / Double(total)) * 100).rounded())
-        let f = Int(((Double(fKcal) / Double(total)) * 100).rounded())
+        let roundedCarbs = Int(((Double(cKcal) / Double(total)) * 100).rounded())
+        let c = min(roundedCarbs, 100 - p)
+        let f = 100 - p - c
         return (p, c, f)
     }
 
@@ -786,7 +787,7 @@ private struct MacroRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Macro display: \(mode.label)")
-                .accessibilityHint("Cycles between Remaining, Consumed, and Percent")
+                .accessibilityHint("Cycles between \(MacroDisplayMode.allCases.map(\.label).joined(separator: ", "))")
             }
 
             HStack(spacing: 12) {
