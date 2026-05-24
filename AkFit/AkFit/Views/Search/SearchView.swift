@@ -465,7 +465,6 @@ struct SearchView: View {
     private func updateTopBrandLogoRootState() {
         let isEmptyInactiveSearchRoot = foodPath.isEmpty
             && !isSearchActiveForBrandLogo
-            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         topBrandLogo.setRootScreenActive(isEmptyInactiveSearchRoot)
     }
 
