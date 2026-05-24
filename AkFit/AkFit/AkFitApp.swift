@@ -20,6 +20,8 @@ struct AkFitApp: App {
     @State private var notifications: NotificationService
 
     init() {
+        SentryMonitoring.configure()
+
         let gs = GuestDataStore()
         let am = AuthManager(guestStore: gs)
         _guestStore    = State(initialValue: gs)

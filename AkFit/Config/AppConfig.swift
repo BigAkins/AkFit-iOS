@@ -32,6 +32,20 @@ enum AppConfig {
         fatalError("Missing SUPABASE_ANON_KEY in Info.plist / xcconfig")
     }()
 
+    static let sentryDSN: String = {
+        if
+            let dsn = Bundle.main.object(forInfoDictionaryKey: "SENTRY_DSN") as? String,
+            !dsn.isEmpty,
+            !dsn.contains("$(")
+        {
+            return dsn
+        }
+        if isRunningUnderXCTest {
+            return ""
+        }
+        return ""
+    }()
+
     // Set by the xctest runner when the app is launched as a test host. Never
     // set in production builds, App Store builds, or regular debug runs — so
     // the placeholders below can only be reached during unit-test execution.

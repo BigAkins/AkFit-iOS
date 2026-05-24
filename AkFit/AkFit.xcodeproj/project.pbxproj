@@ -14,6 +14,7 @@
 		61A191822F7930450061850D /* Storage in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191812F7930450061850D /* Storage */; };
 		61A191842F7930450061850D /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191832F7930450061850D /* Supabase */; };
 		61A191862F7930450061850D /* HealthKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 61A191852F7930450061850D /* HealthKit.framework */; };
+		61A191902F7940000061850D /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 61A191912F7940000061850D /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -93,6 +94,7 @@
 				61A191822F7930450061850D /* Storage in Frameworks */,
 				61A191802F7930450061850D /* Realtime in Frameworks */,
 				61A191862F7930450061850D /* HealthKit.framework in Frameworks */,
+				61A191902F7940000061850D /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,6 +174,7 @@
 				61A1917F2F7930450061850D /* Realtime */,
 				61A191812F7930450061850D /* Storage */,
 				61A191832F7930450061850D /* Supabase */,
+				61A191912F7940000061850D /* Sentry */,
 			);
 			productName = AkFit;
 			productReference = 61A1912F2F7921AE0061850D /* Ak-Fit.app */;
@@ -257,6 +260,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				61A191922F7940000061850D /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 61A191302F7921AE0061850D /* Products */;
@@ -661,6 +665,14 @@
 				minimumVersion = 2.5.1;
 			};
 		};
+		61A191922F7940000061850D /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 9.14.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -693,6 +705,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 61A191592F7925CF0061850D /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
+		};
+		61A191912F7940000061850D /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61A191922F7940000061850D /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
