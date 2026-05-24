@@ -1,5 +1,38 @@
 import SwiftUI
 
+/// How the dashboard's macro cards present per-macro progress. Persisted via
+/// `@AppStorage` on the dashboard so the user's choice survives relaunch.
+///
+/// - `remaining`: grams still left to hit the target (AkFit default).
+/// - `consumed`: grams logged so far, alongside the target.
+/// - `percent`: each macro's share of total consumed macro kcal — useful for
+///   users tracking distribution rather than absolute amounts.
+enum MacroDisplayMode: String, CaseIterable {
+    case remaining
+    case consumed
+    case percent
+
+    /// Short label rendered on the toggle pill — doubles as the user-visible
+    /// mode name.
+    var label: String {
+        switch self {
+        case .remaining: return "Remaining"
+        case .consumed:  return "Consumed"
+        case .percent:   return "Percent"
+        }
+    }
+
+    /// Next mode in the cycle. Wraps from `.percent` back to `.remaining` so
+    /// the toggle reads as a continuous loop instead of a dead-end.
+    var next: MacroDisplayMode {
+        switch self {
+        case .remaining: return .consumed
+        case .consumed:  return .percent
+        case .percent:   return .remaining
+        }
+    }
+}
+
 /// Main dashboard — the first screen the user sees after onboarding.
 ///
 /// **Data sources:**
@@ -37,6 +70,12 @@ struct DashboardView: View {
     /// Currently-displayed day. Normalised to start-of-day (device-local).
     @State private var selectedDate: Date = Calendar.current.startOfDay(for: Date())
     @State private var topBrandLogo = AkFitTopBrandLogoState()
+
+    /// User-selected macro presentation mode. Persisted across launches via
+    /// `@AppStorage` so the dashboard reopens in whatever mode the user last
+    /// chose. Defaults to `.remaining` to preserve AkFit's current default.
+    @AppStorage("dashboardMacroDisplayMode")
+    private var macroDisplayMode: MacroDisplayMode = .remaining
 
     /// Logs that match `selectedDate`. When viewing today, mirrors
     /// `FoodLogStore.todayLogs` so Search-tab inserts surface immediately.
@@ -145,10 +184,16 @@ struct DashboardView: View {
                                 .listRowSeparator(.hidden)
                                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
 
-                            MacroRow(summary: summary)
-                                .listRowBackground(Color(UIColor.systemBackground))
-                                .listRowSeparator(.hidden)
-                                .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
+                            MacroRow(
+                                summary: summary,
+                                mode: macroDisplayMode,
+                                onCycleMode: {
+                                    macroDisplayMode = macroDisplayMode.next
+                                }
+                            )
+                            .listRowBackground(Color(UIColor.systemBackground))
+                            .listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 0, trailing: 0))
 
                             // Lightweight water tracker — sits between macros and
                             // the food sections so calories/macros stay visually
@@ -699,49 +744,139 @@ private struct CalorieSummaryCard: View {
 
 private struct MacroRow: View {
     let summary: DaySummary
+    let mode: MacroDisplayMode
+    let onCycleMode: () -> Void
+
+    /// Macro calorie distribution as integer percents (protein/carbs/fat).
+    /// Computed once for the row so each `MacroCard` doesn't need to know the
+    /// other macros — single source of truth, no math duplication. Returns
+    /// zeros when nothing has been logged so percent mode renders a clean
+    /// "0%" state instead of dividing by zero.
+    private var percents: (protein: Int, carbs: Int, fat: Int) {
+        let pKcal = summary.consumedProteinG * 4
+        let cKcal = summary.consumedCarbsG   * 4
+        let fKcal = summary.consumedFatG     * 9
+        let total = pKcal + cKcal + fKcal
+        guard total > 0 else { return (0, 0, 0) }
+        let p = Int(((Double(pKcal) / Double(total)) * 100).rounded())
+        let roundedCarbs = Int(((Double(cKcal) / Double(total)) * 100).rounded())
+        let c = min(roundedCarbs, 100 - p)
+        let f = 100 - p - c
+        return (p, c, f)
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            MacroCard(
-                name: "Protein",
-                consumed: summary.consumedProteinG,
-                target: summary.targetProteinG,
-                color: .red
-            )
-            MacroCard(
-                name: "Carbs",
-                consumed: summary.consumedCarbsG,
-                target: summary.targetCarbsG,
-                color: .orange
-            )
-            MacroCard(
-                name: "Fat",
-                consumed: summary.consumedFatG,
-                target: summary.targetFatG,
-                color: .blue
-            )
+        VStack(alignment: .leading, spacing: 8) {
+            // Mode toggle. Right-aligned and capsule-styled so it reads as a
+            // tappable affordance without competing with the macro cards
+            // below. Shows the active mode's label alongside a cycle icon.
+            HStack {
+                Spacer()
+                Button(action: onCycleMode) {
+                    HStack(spacing: 4) {
+                        Text(mode.label)
+                            .font(.caption.weight(.medium))
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .font(.caption2)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color(.systemGray6))
+                    .clipShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Macro display: \(mode.label)")
+                .accessibilityHint("Cycles between \(MacroDisplayMode.allCases.map(\.label).joined(separator: ", "))")
+            }
+
+            HStack(spacing: 12) {
+                MacroCard(
+                    name: "Protein",
+                    consumed: summary.consumedProteinG,
+                    target: summary.targetProteinG,
+                    percent: percents.protein,
+                    color: .red,
+                    mode: mode
+                )
+                MacroCard(
+                    name: "Carbs",
+                    consumed: summary.consumedCarbsG,
+                    target: summary.targetCarbsG,
+                    percent: percents.carbs,
+                    color: .orange,
+                    mode: mode
+                )
+                MacroCard(
+                    name: "Fat",
+                    consumed: summary.consumedFatG,
+                    target: summary.targetFatG,
+                    percent: percents.fat,
+                    color: .blue,
+                    mode: mode
+                )
+            }
         }
     }
 }
 
-/// Macro card showing remaining grams, a thin horizontal progress bar,
-/// and the daily target as context.
+/// Macro card. Renders one macro's progress for the active `MacroDisplayMode`.
 ///
-/// Uses `consumed` + `target` as source of truth — `remaining` and `progress`
-/// are derived internally so callers don't have to compute them twice.
+/// Uses `consumed` + `target` as the underlying source of truth, plus a
+/// pre-computed `percent` (the parent `MacroRow` already needs all three to
+/// derive distribution so it hands the result down rather than each card
+/// redoing the math). Layout stays identical across modes — only the primary
+/// value, secondary label, and bar fill semantics swap.
 private struct MacroCard: View {
     let name: String
     let consumed: Int
     let target: Int
+    /// This macro's share of total consumed macro kcal as an integer percent.
+    /// Provided by the parent in all modes; only surfaces in percent mode.
+    let percent: Int
     let color: Color
+    let mode: MacroDisplayMode
 
     private var remaining: Int {
         max(0, target - consumed)
     }
 
+    /// Bar fill fraction. In remaining/consumed modes it's "how close to
+    /// target are we"; in percent mode it's the macro's calorie share so the
+    /// three bars together visually express the distribution.
     private var progress: Double {
-        guard target > 0 else { return 0 }
-        return min(1.0, Double(consumed) / Double(target))
+        switch mode {
+        case .remaining, .consumed:
+            guard target > 0 else { return 0 }
+            return min(1.0, Double(consumed) / Double(target))
+        case .percent:
+            return min(1.0, Double(percent) / 100.0)
+        }
+    }
+
+    /// Hides the colored fill entirely when there's nothing to draw — keeps
+    /// the empty state visually flat instead of leaving a 0-width phantom strip.
+    private var hasFill: Bool {
+        switch mode {
+        case .remaining, .consumed: return consumed > 0
+        case .percent:              return percent > 0
+        }
+    }
+
+    private var primaryText: String {
+        switch mode {
+        case .remaining: return "\(remaining)g"
+        case .consumed:  return "\(consumed)g"
+        case .percent:   return "\(percent)%"
+        }
+    }
+
+    private var secondaryText: String {
+        switch mode {
+        case .remaining: return "of \(target)g"
+        case .consumed:  return "/ \(target)g"
+        case .percent:   return "of macros"
+        }
     }
 
     var body: some View {
@@ -750,14 +885,14 @@ private struct MacroCard: View {
                 .font(.caption.weight(.medium))
                 .foregroundStyle(color)
 
-            Text("\(remaining)g")
+            Text(primaryText)
                 .font(.title3.weight(.bold))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
                 .contentTransition(.numericText())
-                .animation(.snappy, value: remaining)
+                .animation(.snappy, value: primaryText)
 
-            // Thin horizontal progress bar — fill represents consumed fraction.
+            // Thin horizontal progress bar — fill represents per-mode progress.
             // Consistent with the macro bars in ProgressTabView.
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
@@ -765,14 +900,14 @@ private struct MacroCard: View {
                         .fill(color.opacity(0.15))
                         .frame(height: 4)
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(color.opacity(consumed > 0 ? 1.0 : 0.0))
+                        .fill(color.opacity(hasFill ? 1.0 : 0.0))
                         .frame(width: geo.size.width * progress, height: 4)
                         .animation(.easeOut(duration: 0.5), value: progress)
                 }
             }
             .frame(height: 4)
 
-            Text("of \(target)g")
+            Text(secondaryText)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
