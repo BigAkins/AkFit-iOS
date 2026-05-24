@@ -59,6 +59,11 @@ private struct AkFitTopBrandLogoScrollPosition: Equatable {
 
 private struct AkFitTopBrandLogoModifier: ViewModifier {
     let state: AkFitTopBrandLogoState
+    let isSuppressed: Bool
+
+    private var isVisible: Bool {
+        state.isVisible && !isSuppressed
+    }
 
     func body(content: Content) -> some View {
         content
@@ -69,13 +74,13 @@ private struct AkFitTopBrandLogoModifier: ViewModifier {
                     .scaledToFit()
                     .frame(height: 48)
                     .padding(.top, 2)
-                    .opacity(state.isVisible ? 1 : 0)
+                    .opacity(isVisible ? 1 : 0)
                     .transaction { transaction in
                         transaction.animation = nil
                     }
                     .allowsHitTesting(false)
                     .accessibilityLabel("AkFit")
-                    .accessibilityHidden(!state.isVisible)
+                    .accessibilityHidden(!isVisible)
             }
     }
 }
@@ -117,8 +122,11 @@ private struct AkFitTopBrandLogoScrollTrackingModifier: ViewModifier {
 
 extension View {
     /// Adds the fixed AkFit top brand logo overlay.
-    func akfitTopBrandLogo(_ state: AkFitTopBrandLogoState) -> some View {
-        modifier(AkFitTopBrandLogoModifier(state: state))
+    func akfitTopBrandLogo(
+        _ state: AkFitTopBrandLogoState,
+        isSuppressed: Bool = false
+    ) -> some View {
+        modifier(AkFitTopBrandLogoModifier(state: state, isSuppressed: isSuppressed))
     }
 
     /// Tracks the native scroll container that drives large-title collapse.
