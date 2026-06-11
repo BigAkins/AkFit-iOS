@@ -1,5 +1,5 @@
 -- =============================================================================
--- Migration: 20260611000000_fix_goals_goal_type_check
+-- Migration: 20260611054748_fix_goals_goal_type_check
 -- Purpose:   Fix the live goals_goal_type_check constraint so 'lean_bulk' is
 --            accepted. This is the root cause of every onboarding final-save
 --            failure since launch for users who chose "Lean Bulk".

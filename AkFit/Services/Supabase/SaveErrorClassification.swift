@@ -115,6 +115,8 @@ nonisolated enum SaveErrorClassification {
             }
         }
 
+        if error is URLError { return "network_error" }
+        if error is DecodingError { return "decode_error" }
         return "unexpected_error"
     }
 

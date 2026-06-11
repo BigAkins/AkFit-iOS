@@ -50,6 +50,12 @@ struct SaveErrorClassificationTests {
         #expect(SaveErrorClassification.kind(of: error) == .sessionExpired)
     }
 
+    @Test(arguments: [ErrorCode.invalidJWT, .badJWT])
+    func authAPIJWTErrorCodes_classifyAsSessionExpired(errorCode: ErrorCode) throws {
+        let error = try Self.authAPIError(errorCode: errorCode)
+        #expect(SaveErrorClassification.kind(of: error) == .sessionExpired)
+    }
+
     // MARK: - Retryable defaults
 
     @Test func plainNetworkError_classifiesAsRetryable() {
@@ -82,7 +88,14 @@ struct SaveErrorClassificationTests {
         )
         #expect(
             SaveErrorClassification.classification(of: URLError(.timedOut))
-                == "unexpected_error"
+                == "network_error"
+        )
+        #expect(
+            SaveErrorClassification.classification(
+                of: DecodingError.dataCorrupted(
+                    .init(codingPath: [], debugDescription: "invalid response")
+                )
+            ) == "decode_error"
         )
     }
 
@@ -91,6 +104,24 @@ struct SaveErrorClassificationTests {
         #expect(SaveErrorClassification.postgrestCode(of: urlError) == "none")
         #expect(SaveErrorClassification.authCode(of: urlError) == "none")
         #expect(SaveErrorClassification.authCode(of: AuthError.sessionMissing) == "session_missing")
+    }
+
+    private static func authAPIError(errorCode: ErrorCode) throws -> AuthError {
+        let url = try #require(URL(string: "https://example.com/auth/v1/user"))
+        let response = try #require(
+            HTTPURLResponse(
+                url: url,
+                statusCode: 401,
+                httpVersion: nil,
+                headerFields: nil
+            )
+        )
+        return AuthError.api(
+            message: "JWT is invalid",
+            errorCode: errorCode,
+            underlyingData: Data(),
+            underlyingResponse: response
+        )
     }
 }
 
