@@ -212,11 +212,19 @@ struct EditGoalView: View {
                 authManager.updateProfile(updatedProfile)
                 dismiss()
             } catch {
-                if error is AuthError {
-                    saveError = "Session expired. Please sign out and sign back in."
-                } else {
-                    saveError = "Couldn't save changes. Please try again."
-                }
+                SentryMonitoring.captureNonFatal(
+                    error,
+                    operation: "edit_goal_save",
+                    tags: [
+                        "classification": SaveErrorClassification.classification(of: error),
+                        "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                        "auth_code":      SaveErrorClassification.authCode(of: error),
+                    ]
+                )
+                saveError = SaveErrorClassification.userMessage(
+                    for: error,
+                    action: "save changes"
+                )
             }
         }
     }

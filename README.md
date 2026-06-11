@@ -228,33 +228,40 @@ cd AkFit-iOS
 
 Open the Xcode project in Xcode or Cursor.
 
-### 3. Create a Supabase project
+### 3. Configure local secrets
 
-Create a Supabase project and keep track of:
+Copy the template and fill in the values from the Supabase dashboard
+(**Project Settings → API**):
 
-- project URL
-- publishable / anon key
-- database credentials
-
-### 4. Add Supabase to the app
-
-Add the Swift package dependency:
-
-```text
-https://github.com/supabase/supabase-swift.git
+```bash
+cp AkFit/Config/Secrets.xcconfig.template AkFit/Config/Secrets.xcconfig
 ```
 
-### 5. Configure local secrets
+Required keys (see the template's comments):
 
-Create a local config file for secrets and environment-specific values.
+- `SUPABASE_URL` — note the `https:/$()/` escape, xcconfig treats `//` as a comment
+- `SUPABASE_ANON_KEY`
+- `SENTRY_DSN` — optional; the app runs without it
 
-Example:
+`Debug.xcconfig` / `Release.xcconfig` include this file with `#include?`
+(optional include), so a **missing file builds fine but crashes at first
+launch** with an intentional, self-describing `fatalError` from
+`AkFit/Config/AppConfig.swift`. If you hit that crash, the file or a key is
+missing/malformed.
 
-```text
-Secrets.xcconfig
+Do **not** commit `Secrets.xcconfig` — it is gitignored; only the template is
+tracked. The `supabase-swift` package dependency is already part of the
+project.
+
+### 4. Set up the database
+
+Migrations, seed data, RLS tests, and the schema-drift verification procedure
+live in [`supabase/README.md`](supabase/README.md):
+
+```bash
+supabase link --project-ref <your-project-ref>
+supabase db push
 ```
-
-Do **not** commit real secrets to the repository.
 
 ---
 
@@ -275,24 +282,23 @@ Use Row Level Security and proper backend policies for user-owned data.
 
 ## Status
 
-AkFit is currently in the **planning and foundation setup** phase.
+AkFit is **shipped on the App Store** (current version: see `MARKETING_VERSION`
+in the Xcode project — 1.0.5 at the time of writing).
 
-Current focus:
+Live feature set:
 
-- repo setup
-- UI reference organization
-- Claude Code instruction system
-- iOS project structure
-- backend foundation planning
+- onboarding → personalized calorie/macro targets (Mifflin-St Jeor)
+- dashboard with daily calorie/macro tracking and previous-day backfill
+- food search (Supabase catalog + Open Food Facts), barcode scanning
+- food logging with favorites, recents, and swipe quick-log
+- water, bodyweight, daily notes, grocery list
+- Sign in with Apple / Google / email, guest mode, account deletion
+- Apple Health export, reminders, Sentry monitoring
 
-Next major steps:
-
-- initialize the Xcode app
-- connect Supabase
-- define the first MVP schema
-- implement onboarding
-- implement dashboard
-- implement food search and logging flow
+Current bias (see `CLAUDE.md` for the authoritative rules): crash prevention,
+App Store compliance, auth/Health stability, and minimal-risk improvements —
+not new feature work. Operational docs: `docs/release-checklist.md`,
+`docs/onboarding-save-flow.md`, `docs/debugging-supabase-errors.md`.
 
 ---
 

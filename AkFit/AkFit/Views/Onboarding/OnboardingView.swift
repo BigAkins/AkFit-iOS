@@ -734,11 +734,24 @@ private struct ResultsStepView: View {
                     "save() failed step=\(report.step.rawValue, privacy: .public) table=\(report.step.table, privacy: .public) action=\(report.step.action, privacy: .public) session_validated=\(report.sessionValidated, privacy: .public) classification=\(report.classification, privacy: .public) postgrest_code=\(report.postgrestCode, privacy: .public) auth_code=\(report.authCode, privacy: .public)"
                 )
                 debugOnboardingSave("save failed \(report.debugSummary)")
-                if shouldShowSessionExpiredMessage(for: error) {
-                    errorMessage = "Session expired. Please sign out and sign back in."
-                } else {
-                    errorMessage = "Couldn't save your targets. Please try again."
-                }
+                // Non-fatal telemetry: codes and step names only, no PII.
+                // Without this, deterministic failures (e.g. the 2026-06
+                // lean_bulk check violation) are invisible in production.
+                SentryMonitoring.captureNonFatal(
+                    error,
+                    operation: "onboarding_save",
+                    tags: [
+                        "step":           report.step.rawValue,
+                        "table":          report.step.table,
+                        "classification": report.classification,
+                        "postgrest_code": report.postgrestCode,
+                        "auth_code":      report.authCode,
+                    ]
+                )
+                errorMessage = SaveErrorClassification.userMessage(
+                    for: error,
+                    action: "save your targets"
+                )
             }
         }
     }
@@ -749,100 +762,21 @@ private struct ResultsStepView: View {
         #endif
     }
 
+    /// Builds the structured log/telemetry report for a failed save step.
+    /// Classification logic lives in `SaveErrorClassification` (shared with
+    /// `EditGoalView` / `EditProfileView` and unit-tested).
     private func describeOnboardingSaveError(
         _ error: Error,
         step: SaveStep,
         sessionValidated: Bool
     ) -> SaveErrorReport {
-        let defaultCode = "none"
-
-        if let authError = error as? AuthError {
-            return SaveErrorReport(
-                step: step,
-                sessionValidated: sessionValidated,
-                classification: classifyAuthError(authError),
-                postgrestCode: defaultCode,
-                authCode: authErrorCode(authError)
-            )
-        }
-
-        if let postgrestError = error as? PostgrestError {
-            return SaveErrorReport(
-                step: step,
-                sessionValidated: sessionValidated,
-                classification: classifyPostgrestError(postgrestError),
-                postgrestCode: postgrestError.code ?? defaultCode,
-                authCode: defaultCode
-            )
-        }
-
-        return SaveErrorReport(
+        SaveErrorReport(
             step: step,
             sessionValidated: sessionValidated,
-            classification: "unexpected_error",
-            postgrestCode: defaultCode,
-            authCode: defaultCode
+            classification: SaveErrorClassification.classification(of: error),
+            postgrestCode: SaveErrorClassification.postgrestCode(of: error),
+            authCode: SaveErrorClassification.authCode(of: error)
         )
-    }
-
-    private func classifyPostgrestError(_ error: PostgrestError) -> String {
-        switch error.code {
-        case "42501":
-            return "postgrest_permission_denied"
-        case "23502":
-            return "postgrest_not_null_violation"
-        case "23503":
-            return "postgrest_foreign_key_violation"
-        case "23505":
-            return "postgrest_unique_violation"
-        case "23514":
-            return "postgrest_check_violation"
-        case "PGRST116":
-            return "postgrest_no_rows_returned"
-        case "PGRST301":
-            return "postgrest_jwt_invalid"
-        default:
-            return "postgrest_error"
-        }
-    }
-
-    private func classifyAuthError(_ error: AuthError) -> String {
-        switch error {
-        case .sessionMissing:
-            return "auth_session_missing"
-        case .jwtVerificationFailed:
-            return "auth_jwt_verification_failed"
-        case .api:
-            return "auth_api_error"
-        default:
-            return "auth_error"
-        }
-    }
-
-    private func authErrorCode(_ error: AuthError) -> String {
-        switch error {
-        case let .api(_, errorCode, _, underlyingResponse):
-            return "\(underlyingResponse.statusCode):\(errorCode.rawValue)"
-        case .sessionMissing:
-            return "session_missing"
-        case .jwtVerificationFailed:
-            return "jwt_verification_failed"
-        default:
-            return "auth_error"
-        }
-    }
-
-    private func shouldShowSessionExpiredMessage(for error: Error) -> Bool {
-        if error is AuthError { return true }
-
-        guard let postgrestError = error as? PostgrestError else {
-            return false
-        }
-
-        let message = postgrestError.message.lowercased()
-        return postgrestError.code == "PGRST301"
-            || message.contains("jwt")
-            || message.contains("auth")
     }
 }
 

@@ -61,6 +61,10 @@ struct SearchView: View {
     /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
     /// Set `true` before the insert call; cleared after it completes.
     @State private var isQuickLogging = false
+    /// Shown when a swipe quick-log insert fails. Mirrors DashboardView's
+    /// `showDeleteError` pattern — previously the gesture failed silently and
+    /// users believed the food was logged.
+    @State private var showQuickLogError = false
     /// Food names and brand names from the database, used as the type-ahead
     /// suggestion pool. Fetched once on first appear. Guaranteed searchable.
     @State private var typeAheadTerms: [String] = []
@@ -129,6 +133,11 @@ struct SearchView: View {
                     .accessibilityHidden(!showSuggestionPanel)
             }
             .navigationTitle("Search")
+            .alert("Couldn't log food", isPresented: $showQuickLogError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("Please check your connection and try again.")
+            }
             .searchable(
                 text: $query,
                 isPresented: $isSearchPresented,
@@ -569,7 +578,15 @@ struct SearchView: View {
                 notifications.cancelTodayReminder()
                 finishSuccessfulLog(backfilling: backfilling)
             } catch {
-                // Preserve the existing silent quick-log failure behavior.
+                SentryMonitoring.captureNonFatal(
+                    error,
+                    operation: "quick_log",
+                    tags: [
+                        "classification": SaveErrorClassification.classification(of: error),
+                        "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                    ]
+                )
+                showQuickLogError = true
             }
         }
     }
@@ -603,7 +620,15 @@ struct SearchView: View {
                 notifications.cancelTodayReminder()
                 finishSuccessfulLog(backfilling: backfilling)
             } catch {
-                // Preserve the existing silent quick-log failure behavior.
+                SentryMonitoring.captureNonFatal(
+                    error,
+                    operation: "quick_log",
+                    tags: [
+                        "classification": SaveErrorClassification.classification(of: error),
+                        "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                    ]
+                )
+                showQuickLogError = true
             }
         }
     }

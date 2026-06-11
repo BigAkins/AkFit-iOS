@@ -40,7 +40,15 @@ For a clean local rebuild (drops everything, replays migrations, then replays `s
 supabase db reset
 ```
 
-### Option 2 — Supabase Dashboard SQL editor
+### Option 2 — Supabase Dashboard SQL editor (last resort only)
+
+> **Warning:** running migration SQL by hand in the dashboard bypasses the
+> `schema_migrations` history, so the CLI can no longer tell what has been
+> applied — and any divergence between the file and what actually ran is
+> invisible. Hand-applied SQL is exactly how the live `goals` table ended up
+> with a `goal_type` check the migrations never declared (the 2026-06
+> onboarding incident). If you must use this path, run the drift check below
+> immediately afterwards and repair history with `supabase migration repair`.
 
 1. Open the project at `https://supabase.com/dashboard/project/cofakxwmrxauqtdldilx`
 2. Navigate to **SQL Editor**
@@ -68,6 +76,9 @@ supabase db reset
 | `20260402000014_data_cleanup_search_text` | Adds normalized `search_text` column, auto-populate trigger, and trigram GIN index on `generic_foods` |
 | `20260403000001_search_improvements` | Updates the `generic_foods` `search_text` trigger to also strip commas |
 | `20260416000000_goals_profiles_update_with_check` | Adds `WITH CHECK` to UPDATE policies on `goals` and `profiles` to close a cross-user write hole |
+| `20260513000000_security_advisor_cleanup` | Security Advisor hardening: pins `search_path` on trigger functions, revokes app-facing execute on `rls_auto_enable()`. No behavior change |
+| `20260514000000_water_entries` | Creates `water_entries` (per-user water intake events) with full CRUD RLS incl. `WITH CHECK` |
+| `20260611054748_fix_goals_goal_type_check` | **Fixes the live `goals_goal_type_check` to accept `lean_bulk`** — the live table predated migration tracking and only allowed the legacy `muscle_gain` value, deterministically failing every Lean Bulk onboarding save (SQLSTATE 23514). See the drift check section below |
 
 Food catalog rows that do not change schema live in `supabase/seeds/food/` (see that folder's README for the file-by-file list).
 
@@ -173,6 +184,17 @@ One free-text note per user per date. Unique on `(user_id, note_date)`.
 ### `grocery_items`
 Persistent shopping list. `is_checked` boolean + `sort_order` int for ordering.
 
+### `water_entries`
+Per-user water intake events; the Dashboard sums the day's rows.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | `gen_random_uuid()` |
+| `user_id` | uuid | FK → `auth.users(id)`, cascade delete |
+| `amount_ml` | int | > 0 and ≤ 5000 |
+| `logged_at` | timestamptz | Default `now()` |
+| `created_at` | timestamptz | Default `now()` |
+
 ---
 
 ## RLS verification
@@ -187,7 +209,8 @@ where schemaname = 'public'
   and tablename in (
     'profiles', 'goals',
     'food_logs', 'generic_foods', 'favorite_foods',
-    'bodyweight_logs', 'daily_notes', 'grocery_items'
+    'bodyweight_logs', 'daily_notes', 'grocery_items',
+    'water_entries'
   )
 order by tablename;
 
@@ -204,8 +227,66 @@ Behavior tests live in `supabase/tests/database/`:
 
 - `rls_policy_shape.test.sql` — checks that policies exist with the expected shape
 - `rls_behavior.test.sql` — exercises actual cross-user reads/writes to confirm RLS blocks them
+- `goals_constraint_shape.test.sql` — asserts `goals_goal_type_check` accepts exactly the app's `GoalType` raw values (regression guard for the 2026-06 incident)
 
-The `CI` GitHub workflow (`.github/workflows/ci.yml`) runs both files against a local Supabase stack on every PR.
+The `CI` GitHub workflow (`.github/workflows/ci.yml`) runs these against a local Supabase stack on every PR.
+
+---
+
+## Verifying live schema matches migrations (drift check)
+
+**Why this exists:** migration files can lie about production. `CREATE TABLE IF
+NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` silently no-op when the object already
+exists, so any table that was ever hand-created in the dashboard may carry
+constraints the files never declared. That is exactly how
+`goals_goal_type_check` enforced `'muscle_gain'` in production while every
+migration file said `'lean_bulk'` — failing 100% of Lean Bulk onboarding saves
+(SQLSTATE 23514) for two months with zero failed CI runs.
+
+Run this check **after every `db push`, before every App Store release**, and
+any time a write fails with `23514`/`42501` that local testing can't reproduce:
+
+```bash
+# 1. Every local migration must appear as applied on the remote (and vice versa).
+supabase migration list --linked
+
+# 2. Surface any live objects that differ from what the migrations build.
+supabase db diff --linked
+```
+
+Then dump the live CHECK constraints and compare against the migrations:
+
+```sql
+-- Run read-only in the SQL editor (or psql). Expected values are in the
+-- migration files; the critical one:
+--   goals_goal_type_check → (goal_type IN ('fat_loss','maintenance','lean_bulk'))
+select conrelid::regclass as "table",
+       conname,
+       pg_get_constraintdef(oid) as definition
+from pg_constraint
+where connamespace = 'public'::regnamespace
+  and contype = 'c'
+order by 1, 2;
+
+-- And the FK delete rules (account deletion relies on ON DELETE CASCADE):
+select conrelid::regclass as "table",
+       conname,
+       pg_get_constraintdef(oid) as definition
+from pg_constraint
+where connamespace = 'public'::regnamespace
+  and contype = 'f'
+order by 1, 2;
+```
+
+If anything differs from the migration files, do **not** edit the dashboard.
+Write a new migration that explicitly `DROP`s and re-`ADD`s the drifted object
+(the pattern used by `20260611054748_fix_goals_goal_type_check`), apply it with
+`supabase db push`, and re-run the check.
+
+Known accepted drift (live objects not yet tracked in migrations):
+`handle_updated_at()` + the `updated_at` triggers on `profiles`/`goals`, and
+the `rls_auto_enable()` helper. `profiles.height_cm`/`weight_kg` are `numeric`
+live (files say `integer`) — harmless, the app decodes both.
 
 ---
 
