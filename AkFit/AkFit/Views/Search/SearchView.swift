@@ -234,17 +234,28 @@ struct SearchView: View {
                 }
             }
             .task {
-                // Fetch suggestions, type-ahead terms, recents, favorites, and grocery items concurrently.
-                async let fetchedSuggestions = suggestionService.fetchSuggestions()
-                async let fetchedTerms = suggestionService.fetchTypeAheadTerms()
+                // `.task` re-runs on EVERY tab appearance (it is cancelled on
+                // disappear), so the static catalog fetches below are guarded:
+                // without the guards the full ~1,500-row type-ahead corpus was
+                // re-downloaded on every Search visit (observed 6x in one
+                // session in production API logs). The isEmpty guard also
+                // self-heals: a failed fetch leaves the array empty, so the
+                // next appearance retries.
+                if suggestions.isEmpty || typeAheadTerms.isEmpty {
+                    async let fetchedSuggestions = suggestionService.fetchSuggestions()
+                    async let fetchedTerms = suggestionService.fetchTypeAheadTerms()
+                    let (loadedSuggestions, loadedTerms) = await (fetchedSuggestions, fetchedTerms)
+                    if suggestions.isEmpty    { suggestions    = loadedSuggestions }
+                    if typeAheadTerms.isEmpty { typeAheadTerms = loadedTerms }
+                }
+                // Recents/favorites/grocery are small per-user queries and DO
+                // change between visits — keep refreshing them per appearance.
                 if let userId = authManager.currentUserId {
                     async let recents: Void = logStore.refreshRecents(userId: userId)
                     async let favs: Void    = favStore.refresh(userId: userId)
                     async let grocery: Void = groceryStore.fetchItems(userId: userId)
                     _ = await (recents, favs, grocery)
                 }
-                suggestions = await fetchedSuggestions
-                typeAheadTerms = await fetchedTerms
             }
             // Receives food items resolved by the center nav scan button (in MainTabView).
             // The cover has already dismissed before this fires, so we can push directly.
