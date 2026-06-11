@@ -11,12 +11,10 @@ import SwiftUI
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
-    @Environment(FoodLogStore.self)        private var logStore
-    @Environment(FavoriteFoodStore.self)   private var favStore
+    // Bodyweight is read for the profile summary row. Other user-owned stores
+    // are no longer referenced here — store reset on sign-out/guest-exit is
+    // centralized in RootView's userState onChange hook.
     @Environment(BodyweightStore.self)     private var weightStore
-    @Environment(WaterStore.self)          private var waterStore
-    @Environment(DailyNoteStore.self)      private var noteStore
-    @Environment(GroceryListStore.self)    private var groceryStore
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
 
@@ -540,9 +538,9 @@ struct SettingsView: View {
             defer { isDeletingAccount = false }
             do {
                 try await authManager.deleteAccount()
-                clearUserOwnedState()
                 // AuthManager signs out locally → authStateChanges fires .signedOut
-                // → RootView re-routes to AuthView automatically.
+                // → RootView re-routes to AuthView AND resets all user-owned
+                // stores via its centralized userState onChange hook.
             } catch {
                 deleteAccountError = error.localizedDescription
             }
@@ -552,25 +550,12 @@ struct SettingsView: View {
     /// Exits guest mode and destroys all local data.
     ///
     /// Called after the user confirms the destructive confirmation dialog.
-    /// Resets in-memory store state before clearing guest data so stale
-    /// entries don't linger in memory after routing back to `AuthView`.
+    /// In-memory store state is cleared by RootView's centralized
+    /// `userState` onChange hook when the transition to `.signedOut` lands —
+    /// per-call-site reset lists are intentionally gone (they had drifted).
     private func exitGuestMode() {
-        logStore.reset()
-        weightStore.reset()
-        waterStore.reset()
-        noteStore.reset()
-        groceryStore.reset()
         authManager.exitGuestMode()
         // AuthManager sets userState = .signedOut → RootView re-routes to AuthView.
-    }
-
-    private func clearUserOwnedState() {
-        logStore.reset()
-        favStore.reset()
-        weightStore.reset()
-        waterStore.reset()
-        noteStore.reset()
-        groceryStore.reset()
     }
 }
 

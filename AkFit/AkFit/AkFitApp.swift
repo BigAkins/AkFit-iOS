@@ -79,6 +79,14 @@ struct AkFitApp: App {
 private struct RootView: View {
     @Environment(AuthManager.self) private var authManager
 
+    // User-owned stores, reset centrally on any identity transition (below).
+    @Environment(FoodLogStore.self)      private var logStore
+    @Environment(FavoriteFoodStore.self) private var favStore
+    @Environment(BodyweightStore.self)   private var weightStore
+    @Environment(WaterStore.self)        private var waterStore
+    @Environment(DailyNoteStore.self)    private var noteStore
+    @Environment(GroceryListStore.self)  private var groceryStore
+
     var body: some View {
         ZStack {
             // Persistent background — renders on the very first SwiftUI frame,
@@ -116,6 +124,29 @@ private struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: authManager.userState)
         .animation(.easeInOut(duration: 0.25), value: authManager.isOnboarded)
         .animation(.easeInOut(duration: 0.25), value: authManager.dataFetchFailed)
+        // ── Centralized user-data reset ──────────────────────────────────
+        // The ONLY place in-memory store state is cleared across identity
+        // transitions (sign-out, account deletion, guest exit, sign-in).
+        // Previously each call site kept its own manual reset list and they
+        // drifted (sign-out reset nothing, exit-guest missed favorites) —
+        // letting user A's logs/favorites/grocery/note leak into user B's
+        // session on a shared device. Firing on every transition is safe:
+        // the next screen's `.task` refetches for the new identity, and
+        // `onChange` runs before newly-inserted views' tasks.
+        .onChange(of: authManager.userState) { _, _ in
+            resetUserOwnedStores()
+        }
+    }
+
+    /// Clears every store that holds per-user data. Add new user-owned
+    /// stores HERE — never as a call-site-local reset list.
+    private func resetUserOwnedStores() {
+        logStore.reset()
+        favStore.reset()
+        weightStore.reset()
+        waterStore.reset()
+        noteStore.reset()
+        groceryStore.reset()
     }
 }
 
