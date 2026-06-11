@@ -239,16 +239,32 @@ final class FoodLogStore {
         }
 
         // Authenticated path: Supabase.
+        //
+        // PostgREST caps every response at the project's max_rows (1,000).
+        // A high-frequency logger (11+ entries/day) exceeds that in the
+        // 90-day window, and a single un-paged ascending request silently
+        // dropped the NEWEST days from the Progress chart. Page explicitly
+        // so the full range always loads. The secondary `id` ordering makes
+        // pagination stable when multiple rows share a `logged_at` value.
         do {
-            let logs: [FoodLog] = try await SupabaseClientProvider.shared
-                .from("food_logs")
-                .select()
-                .eq("user_id", value: userId.uuidString)
-                .gte("logged_at", value: rangeStartISO(days: days))
-                .order("logged_at", ascending: true)
-                .execute()
-                .value
-            weekLogs = logs
+            var all: [FoodLog] = []
+            let pageSize = 1_000
+            let maxPages = 5 // hard stop ≈ 55 logs/day over 90 days
+            for page in 0..<maxPages {
+                let logs: [FoodLog] = try await SupabaseClientProvider.shared
+                    .from("food_logs")
+                    .select()
+                    .eq("user_id", value: userId.uuidString)
+                    .gte("logged_at", value: rangeStartISO(days: days))
+                    .order("logged_at", ascending: true)
+                    .order("id", ascending: true)
+                    .range(from: page * pageSize, to: (page + 1) * pageSize - 1)
+                    .execute()
+                    .value
+                all.append(contentsOf: logs)
+                if logs.count < pageSize { break }
+            }
+            weekLogs = all
         } catch {
             // Non-fatal: ProgressTabView shows whatever data is available.
         }
