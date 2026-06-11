@@ -59,6 +59,11 @@ final class AuthManager {
 
     private let guestStore: GuestDataStore
 
+    /// Cold-start safety timeout (see `init`). Cancelled as soon as the auth
+    /// observer receives its first event so a slow `fetchUserData` can never
+    /// flash `AuthView` at an already signed-in user mid-resolution.
+    private var loadingTimeoutTask: Task<Void, Never>?
+
     // MARK: - Computed: profile and goal (unified for both paths)
 
     /// The user's profile. Sourced from `GuestDataStore` when in guest mode;
@@ -113,8 +118,11 @@ final class AuthManager {
         // (SDK issue, network failure at cold start), clear `isLoading` after
         // 10 seconds so the user isn't stuck on a blank screen forever.
         // The auth observer normally clears `isLoading` in < 1 second.
-        Task {
+        // Cancelled by `handle(event:session:)` so the timeout can't expose
+        // an interactive `AuthView` while a session is still being resolved.
+        loadingTimeoutTask = Task {
             try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
             if isLoading { isLoading = false }
         }
     }
@@ -141,6 +149,11 @@ final class AuthManager {
     }
 
     private func handle(event: AuthChangeEvent, session: Session?) async {
+        // An auth event is being processed — the cold-start timeout must not
+        // clear `isLoading` mid-resolution (that would show an interactive
+        // `AuthView`/guest entry point while a session fetch is in flight).
+        loadingTimeoutTask?.cancel()
+
         switch event {
 
         case .initialSession, .signedIn:
@@ -150,6 +163,14 @@ final class AuthManager {
                     guestStore.clearAll()
                 }
                 let result = await fetchUserData(userId: session.user.id)
+                // Re-check after the await: the user may have tapped
+                // "Continue as Guest" while fetchUserData was in flight.
+                // Without this, the app lands in `.authenticated` while
+                // `guestStore.isActive` stays true — and every store would
+                // silently write to UserDefaults instead of Supabase.
+                if guestStore.isActive {
+                    guestStore.clearAll()
+                }
                 self._serverProfile  = result.profile
                 self._serverGoal     = result.goal
                 self.dataFetchFailed = result.fetchFailed
@@ -227,6 +248,7 @@ final class AuthManager {
             return (value, false)
         } catch {
             if Self.isNotFound(error) { return (nil, false) }
+            captureFetchFailure(error, table: "profiles")
             return (nil, true)
         }
     }
@@ -245,8 +267,33 @@ final class AuthManager {
             return (value, false)
         } catch {
             if Self.isNotFound(error) { return (nil, false) }
+            captureFetchFailure(error, table: "goals")
             return (nil, true)
         }
+    }
+
+    /// Reports a profile/goal fetch failure to Sentry (these route the user to
+    /// `DataFetchErrorView`). Plain connectivity errors are skipped — they are
+    /// expected on flaky networks and would only add noise.
+    private func captureFetchFailure(_ error: Error, table: String) {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .networkConnectionLost, .timedOut,
+                 .cannotFindHost, .cannotConnectToHost, .dataNotAllowed:
+                return
+            default:
+                break
+            }
+        }
+        SentryMonitoring.captureNonFatal(
+            error,
+            operation: "user_data_fetch",
+            tags: [
+                "table":          table,
+                "classification": SaveErrorClassification.classification(of: error),
+                "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+            ]
+        )
     }
 
     // MARK: - Retry after fetch failure (authenticated path)
@@ -407,6 +454,11 @@ final class AuthManager {
                 )
         } catch {
             debugDeleteAccount("edge function invocation failed: \(describeDeleteAccountError(error))")
+            SentryMonitoring.captureNonFatal(
+                error,
+                operation: "delete_account",
+                tags: ["stage": "edge_function_invoke"]
+            )
             throw DeleteAccountError.serverError
         }
 
