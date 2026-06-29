@@ -26,7 +26,8 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        # This workflow uses production DB credentials later, so pin actions.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Install PostgreSQL client
         shell: bash

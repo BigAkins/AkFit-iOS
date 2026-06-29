@@ -9,16 +9,18 @@ green. The check lives in `supabase/checks/production_drift.sql` and is run by
 
 The check reads only PostgreSQL catalog metadata and validates:
 
-- `public.goals.goal_type` accepts exactly `fat_loss`, `maintenance`, and `lean_bulk`.
-- `public.goals.target_pace` accepts exactly `slow`, `moderate`, and `fast`.
-- `public.food_logs.meal_slot` accepts exactly `breakfast`, `lunch`, `dinner`, and `snack`.
-- `public.profiles.sex` accepts exactly `male` and `female`.
-- `public.profiles.activity_level` accepts exactly `sedentary`, `light`, `moderate`, `active`, and `very_active`.
+- The canonical CHECK constraints and accepted values for:
+  `public.goals.goal_type`, `public.goals.target_pace`,
+  `public.food_logs.meal_slot`, `public.profiles.sex`, and
+  `public.profiles.activity_level`.
+- No additional CHECK constraint on those same columns has a different accepted
+  value set.
 - RLS is enabled on user-owned tables:
   `bodyweight_logs`, `daily_notes`, `favorite_foods`, `food_logs`, `goals`,
   `grocery_items`, `profiles`, and `water_entries`.
-- The expected owner-scoped RLS policies exist with the same `USING` and
-  `WITH CHECK` expressions tracked by migrations and local pgTAP tests.
+- The expected owner-scoped RLS policies exist with the same command, policy
+  mode, role set, `USING`, and `WITH CHECK` expressions tracked by migrations
+  and local pgTAP tests.
 - No extra policies exist on those user-owned tables.
 
 Naming note: the app-facing "pace" value is stored in
