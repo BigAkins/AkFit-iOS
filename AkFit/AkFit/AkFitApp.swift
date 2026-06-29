@@ -51,6 +51,9 @@ struct AkFitApp: App {
                 .environment(router)
                 .environment(healthKit)
                 .environment(notifications)
+                .onOpenURL { url in
+                    Task { await authManager.handleIncomingURL(url) }
+                }
         }
         // Refill the 7-day notification window whenever the app comes to the
         // foreground. Keeps the rolling schedule current without background processing.
@@ -71,6 +74,7 @@ struct AkFitApp: App {
 /// Reads `AuthManager` state and routes to the correct top-level screen.
 ///
 /// Routing rules (evaluated in order):
+///   password recovery active                            → SetNewPasswordView
 ///   isLoading                                          → blank (prevents flash on cold start)
 ///   userState == .signedOut                            → AuthView
 ///   userState == .authenticated && dataFetchFailed     → DataFetchErrorView (retry screen)
@@ -97,7 +101,9 @@ private struct RootView: View {
                 .ignoresSafeArea()
 
             Group {
-                if authManager.isLoading {
+                if authManager.isPasswordRecoveryPresented {
+                    SetNewPasswordView()
+                } else if authManager.isLoading {
                     // Branded loading screen — visible only while the auth
                     // observer resolves the initial session (typically < 1s).
                     VStack {
@@ -124,16 +130,21 @@ private struct RootView: View {
         .animation(.easeInOut(duration: 0.25), value: authManager.userState)
         .animation(.easeInOut(duration: 0.25), value: authManager.isOnboarded)
         .animation(.easeInOut(duration: 0.25), value: authManager.dataFetchFailed)
+        .animation(.easeInOut(duration: 0.25), value: authManager.passwordRecoveryState)
         // ── Centralized user-data reset ──────────────────────────────────
         // The ONLY place in-memory store state is cleared across identity
-        // transitions (sign-out, account deletion, guest exit, sign-in).
+        // transitions (sign-out, account deletion, guest exit, sign-in,
+        // recovery links that swap accounts while already authenticated).
         // Previously each call site kept its own manual reset list and they
         // drifted (sign-out reset nothing, exit-guest missed favorites) —
         // letting user A's logs/favorites/grocery/note leak into user B's
-        // session on a shared device. Firing on every transition is safe:
+        // session on a shared device. Watch the actual currentUserId instead
+        // of only the signedOut/guest/authenticated enum so an authenticated
+        // user A → authenticated user B transition still clears state.
+        // Firing on every identity transition is safe:
         // the next screen's `.task` refetches for the new identity, and
         // `onChange` runs before newly-inserted views' tasks.
-        .onChange(of: authManager.userState) { _, _ in
+        .onChange(of: authManager.currentUserId) { _, _ in
             resetUserOwnedStores()
         }
     }

@@ -95,7 +95,7 @@ struct AuthView: View {
             .animation(.easeInOut(duration: 0.15), value: password.count < 6 && !password.isEmpty)
 
             // Forgot password — sign-in mode only. Shows an alert after the reset
-            // email fires so the user knows to check their inbox.
+            // email fires so the user knows to open the recovery link here.
             if mode == .signIn {
                 HStack {
                     Spacer()
@@ -300,7 +300,7 @@ struct AuthView: View {
             defer { isResettingPassword = false }
             do {
                 try await authManager.sendPasswordReset(email: trimmed)
-                resetAlertMessage = "A reset link has been sent to \(trimmed). Check your inbox."
+                resetAlertMessage = "Check your email for a recovery link. Open it on this device to create a new password."
             } catch {
                 resetAlertMessage = "Couldn't send reset email. Please try again."
             }
