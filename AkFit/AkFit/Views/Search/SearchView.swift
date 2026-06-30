@@ -58,6 +58,8 @@ struct SearchView: View {
     @Environment(\.isSearching)             private var isSearchFieldActive
 
     @State private var newGroceryItem: String = ""
+    @State private var showGroceryActionError = false
+    @State private var groceryActionErrorMessage = "Please check your connection and try again."
     /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
     /// Set `true` before the insert call; cleared after it completes.
     @State private var isQuickLogging = false
@@ -137,6 +139,11 @@ struct SearchView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Please check your connection and try again.")
+            }
+            .alert("Couldn't update grocery list", isPresented: $showGroceryActionError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(groceryActionErrorMessage)
             }
             .searchable(
                 text: $query,
@@ -377,19 +384,29 @@ struct SearchView: View {
     private var groceryListSection: some View {
         Section {
             ForEach(groceryStore.items) { item in
+                let isBusy = groceryStore.isItemBusy(item)
                 GroceryItemRow(item: item)
                     .contentShape(Rectangle())
+                    .opacity(isBusy ? 0.55 : 1)
+                    .allowsHitTesting(!isBusy)
                     .onTapGesture {
                         guard let userId = authManager.currentUserId else { return }
-                        Task { await groceryStore.toggleItem(item, userId: userId) }
+                        Task {
+                            let result = await groceryStore.toggleItem(item, userId: userId)
+                            presentGroceryActionFailure(result)
+                        }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             guard let userId = authManager.currentUserId else { return }
-                            Task { await groceryStore.deleteItem(item, userId: userId) }
+                            Task {
+                                let result = await groceryStore.deleteItem(item, userId: userId)
+                                presentGroceryActionFailure(result)
+                            }
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .disabled(isBusy)
                     }
             }
 
@@ -397,12 +414,19 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 TextField("Add item…", text: $newGroceryItem)
                     .onSubmit { addGroceryItem() }
+                    .disabled(groceryStore.isAdding)
                 if !newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(action: addGroceryItem) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(.primary)
+                        if groceryStore.isAdding {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                        }
                     }
+                    .disabled(groceryStore.isAdding)
                 }
             }
         } header: {
@@ -415,23 +439,39 @@ struct SearchView: View {
                 if groceryStore.items.contains(where: \.isChecked) {
                     Button("Clear checked") {
                         guard let userId = authManager.currentUserId else { return }
-                        Task { await groceryStore.clearChecked(userId: userId) }
+                        Task {
+                            let result = await groceryStore.clearChecked(userId: userId)
+                            presentGroceryActionFailure(result)
+                        }
                     }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .textCase(nil)
+                    .disabled(groceryStore.isClearingChecked)
                 }
             }
             .padding(.bottom, 2)
         }
     }
 
-    /// Adds the current `newGroceryItem` text as a new list entry, then clears the field.
+    /// Adds the current `newGroceryItem` text as a new list entry, then clears the field on success.
     private func addGroceryItem() {
         let name = newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let userId = authManager.currentUserId else { return }
-        newGroceryItem = ""
-        Task { await groceryStore.addItem(name: name, userId: userId) }
+        Task {
+            let result = await groceryStore.addItem(name: name, userId: userId)
+            if result.didSucceed,
+               newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines) == name {
+                newGroceryItem = ""
+            }
+            presentGroceryActionFailure(result)
+        }
+    }
+
+    private func presentGroceryActionFailure(_ result: GroceryListActionResult) {
+        guard case let .failed(message) = result else { return }
+        groceryActionErrorMessage = message
+        showGroceryActionError = true
     }
 
     /// Shown while a debounce delay or network request is in progress and
