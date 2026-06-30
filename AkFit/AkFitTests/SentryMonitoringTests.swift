@@ -15,6 +15,14 @@ struct SentryMonitoringTests {
         #expect(SentryMonitoring.redactedURLString("search failed") == "search failed")
     }
 
+    @Test func redactedURLString_removesCustomSchemeQueryAndFragment() {
+        let redacted = SentryMonitoring.redactedURLString(
+            "akfit://auth-callback?flow=password-recovery&state=abc#access_token=secret"
+        )
+
+        #expect(redacted == "akfit://auth-callback")
+    }
+
     @Test func scrubTelemetryDictionary_redactsSensitiveValuesButKeepsUsefulContext() throws {
         let scrubbed = SentryMonitoring.scrubTelemetryDictionary([
             "url": "https://example.supabase.co/auth/v1/callback?code=secret#token",

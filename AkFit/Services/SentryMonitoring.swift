@@ -88,8 +88,8 @@ enum SentryMonitoring {
 
     nonisolated static func redactedURLString(_ value: String) -> String {
         guard var components = URLComponents(string: value),
-              let scheme = components.scheme?.lowercased(),
-              ["http", "https"].contains(scheme),
+              let scheme = components.scheme,
+              !scheme.isEmpty,
               components.host != nil
         else {
             return value
@@ -158,7 +158,7 @@ enum SentryMonitoring {
         return pieces
             .map { piece in
                 let string = String(piece)
-                return string.hasPrefix("http://") || string.hasPrefix("https://")
+                return string.contains("://")
                     ? redactedURLString(string)
                     : string
             }

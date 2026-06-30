@@ -531,7 +531,7 @@ private struct ProtectedGuestStorage {
         try excludeFromBackups(directory)
 
         let url = fileURL(forKey: key)
-        try data.write(to: url, options: [.atomic])
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         try protect(url)
         try excludeFromBackups(url)
     }

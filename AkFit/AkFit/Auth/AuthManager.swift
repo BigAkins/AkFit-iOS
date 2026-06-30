@@ -209,7 +209,12 @@ final class AuthManager {
             }
 
         case .passwordRecovery:
-            Self.setPasswordRecoveryPending(true)
+            guard Self.isPasswordRecoveryPending else {
+                try? await SupabaseClientProvider.shared.auth.signOut(scope: .local)
+                clearAuthenticatedState()
+                self.passwordRecoveryState = .invalidLink
+                break
+            }
             self.pendingAppleDisplayName = nil
             if let session {
                 await applyAuthenticatedSession(session)

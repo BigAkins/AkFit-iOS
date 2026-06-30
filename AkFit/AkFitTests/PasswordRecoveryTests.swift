@@ -93,6 +93,8 @@ struct PasswordRecoveryLinkTests {
 struct AuthManagerPasswordRecoveryTests {
 
     @Test func passwordRecoveryEvent_presentsRecoveryScreen() async {
+        Self.markRecoveryPending()
+        defer { Self.clearRecoveryPersistence() }
         let manager = AuthManager(previewMode: true)
 
         await manager.handle(event: .passwordRecovery, session: Self.makeSession())
@@ -107,6 +109,8 @@ struct AuthManagerPasswordRecoveryTests {
     }
 
     @Test func signedOutEvent_clearsRecoveryState() async {
+        Self.markRecoveryPending()
+        defer { Self.clearRecoveryPersistence() }
         let manager = AuthManager(previewMode: true)
 
         await manager.handle(event: .passwordRecovery, session: Self.makeSession())
@@ -117,6 +121,8 @@ struct AuthManagerPasswordRecoveryTests {
     }
 
     @Test func dismissPasswordRecovery_doesNotDismissReadyRecoverySession() async {
+        Self.markRecoveryPending()
+        defer { Self.clearRecoveryPersistence() }
         let manager = AuthManager(previewMode: true)
 
         await manager.handle(event: .passwordRecovery, session: Self.makeSession())
@@ -127,7 +133,19 @@ struct AuthManagerPasswordRecoveryTests {
         await manager.handle(event: .signedOut, session: nil)
     }
 
+    @Test func unboundPasswordRecoveryEvent_isRejected() async {
+        Self.clearRecoveryPersistence()
+        let manager = AuthManager(previewMode: true)
+
+        await manager.handle(event: .passwordRecovery, session: Self.makeSession())
+
+        #expect(manager.passwordRecoveryState == .invalidLink)
+        #expect(manager.isPasswordRecoveryPresented)
+        #expect(manager.session == nil)
+    }
+
     @Test func malformedRecoveryURL_marksLinkInvalid() async throws {
+        Self.clearRecoveryPersistence()
         let manager = AuthManager(previewMode: true)
         let url = try #require(URL(string: "akfit://auth-callback?flow=password-recovery"))
 
@@ -139,6 +157,8 @@ struct AuthManagerPasswordRecoveryTests {
     }
 
     @Test func malformedRecoveryURL_doesNotClearExistingSession() async throws {
+        Self.markRecoveryPending()
+        defer { Self.clearRecoveryPersistence() }
         let manager = AuthManager(previewMode: true)
         let url = try #require(URL(string: "akfit://auth-callback?flow=password-recovery"))
 
@@ -169,5 +189,14 @@ struct AuthManagerPasswordRecoveryTests {
             refreshToken: "refresh-token",
             user: user
         )
+    }
+
+    private static func markRecoveryPending() {
+        UserDefaults.standard.set(true, forKey: "akfit.auth.passwordRecoveryPending")
+    }
+
+    private static func clearRecoveryPersistence() {
+        UserDefaults.standard.removeObject(forKey: "akfit.auth.passwordRecoveryPending")
+        UserDefaults.standard.removeObject(forKey: "akfit.auth.passwordRecoveryExpectedState")
     }
 }
