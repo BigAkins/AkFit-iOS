@@ -99,6 +99,62 @@ struct GroceryListStoreTests {
         #expect(itemsAfterStaleFetch.isEmpty)
     }
 
+    @Test func staleFetchAfterSuccessfulAddDoesNotHideConfirmedItem() async {
+        let userId = UUID()
+        let remote = GroceryListRemoteSpy()
+        remote.suspendedFetchUserID = userId
+        let store = GroceryListStore(remote: remote.client)
+
+        let staleFetchTask = Task {
+            await store.fetchItems(userId: userId)
+        }
+        await remote.waitForSuspendedFetch()
+        #expect(remote.isFetchSuspended)
+        guard remote.isFetchSuspended else {
+            staleFetchTask.cancel()
+            return
+        }
+
+        let addResult = await store.addItem(name: "Milk", userId: userId)
+        let addedItem = store.items.first
+        #expect(didSucceed(addResult))
+        #expect(addedItem?.name == "Milk")
+
+        remote.completeFetch(with: [])
+        await staleFetchTask.value
+
+        #expect(store.items.map(\.id) == addedItem.map { [$0.id] } ?? [])
+        #expect(store.items.first?.name == "Milk")
+    }
+
+    @Test func staleFetchAfterSuccessfulToggleDoesNotRevertCheckedState() async {
+        let userId = UUID()
+        let item = makeGroceryItem(userId: userId, isChecked: false)
+        let remote = GroceryListRemoteSpy()
+        remote.suspendedFetchUserID = userId
+        let store = GroceryListStore(remote: remote.client, previewItems: [item])
+
+        let staleFetchTask = Task {
+            await store.fetchItems(userId: userId)
+        }
+        await remote.waitForSuspendedFetch()
+        #expect(remote.isFetchSuspended)
+        guard remote.isFetchSuspended else {
+            staleFetchTask.cancel()
+            return
+        }
+
+        let toggleResult = await store.toggleItem(item, userId: userId)
+        #expect(didSucceed(toggleResult))
+        #expect(store.items.first?.isChecked == true)
+
+        remote.completeFetch(with: [item])
+        await staleFetchTask.value
+
+        #expect(store.items.map(\.id) == [item.id])
+        #expect(store.items.first?.isChecked == true)
+    }
+
     @Test func currentUserFetchAppliesWithAuthIdentityGuard() async {
         let userId = UUID()
         let item = makeGroceryItem(userId: userId)
@@ -161,13 +217,48 @@ struct GroceryListStoreTests {
         let result = await store.clearChecked(userId: userId)
         let message = failureMessage(from: result)
         let itemIDs = store.items.map { $0.id }
+        let checkedStates = store.items.map(\.isChecked)
         let isClearingChecked = store.isClearingChecked
-        let deleteCheckedUserIDs = remote.deleteCheckedUserIDs
+        let deleteCheckedRequests = remote.deleteCheckedRequests
 
         #expect(message == "Couldn't clear checked grocery items. Please check your connection and try again.")
         #expect(itemIDs == [checked.id, unchecked.id])
+        #expect(checkedStates == [true, false])
         #expect(isClearingChecked == false)
-        #expect(deleteCheckedUserIDs == [userId])
+        #expect(deleteCheckedRequests.map(\.userId) == [userId])
+        #expect(deleteCheckedRequests.map(\.itemIDs) == [Set([checked.id])])
+    }
+
+    @Test func clearCheckedDeletesOnlyCapturedIDsWhenAnotherItemIsCheckedDuringClear() async {
+        let userId = UUID()
+        let checked = makeGroceryItem(userId: userId, name: "Eggs", isChecked: true)
+        let unchecked = makeGroceryItem(userId: userId, name: "Rice", isChecked: false, sortOrder: 1)
+        let remote = GroceryListRemoteSpy()
+        remote.shouldSuspendDeleteChecked = true
+        let store = GroceryListStore(remote: remote.client, previewItems: [checked, unchecked])
+
+        let clearTask = Task {
+            await store.clearChecked(userId: userId)
+        }
+        await remote.waitForSuspendedDeleteChecked()
+        #expect(remote.isDeleteCheckedSuspended)
+        guard remote.isDeleteCheckedSuspended else {
+            clearTask.cancel()
+            return
+        }
+
+        let toggleResult = await store.toggleItem(unchecked, userId: userId)
+        #expect(didSucceed(toggleResult))
+        #expect(store.items.first(where: { $0.id == unchecked.id })?.isChecked == true)
+
+        remote.completeDeleteChecked()
+        let clearResult = await clearTask.value
+
+        #expect(didSucceed(clearResult))
+        #expect(remote.deleteCheckedRequests.map(\.userId) == [userId])
+        #expect(remote.deleteCheckedRequests.map(\.itemIDs) == [Set([checked.id])])
+        #expect(store.items.map(\.id) == [unchecked.id])
+        #expect(store.items.first?.isChecked == true)
     }
 }
 
@@ -192,7 +283,7 @@ private final class GroceryListRemoteSpy {
     var addedItems: [GroceryItem] = []
     var updatedItems: [(id: UUID, isChecked: Bool)] = []
     var deletedItemIDs: [UUID] = []
-    var deleteCheckedUserIDs: [UUID] = []
+    var deleteCheckedRequests: [(userId: UUID, itemIDs: Set<UUID>)] = []
 
     var fetchError: Error?
     var addError: Error?
@@ -202,9 +293,15 @@ private final class GroceryListRemoteSpy {
 
     var suspendedFetchUserID: UUID?
     private var suspendedFetchContinuation: CheckedContinuation<[GroceryItem], Error>?
+    var shouldSuspendDeleteChecked = false
+    private var suspendedDeleteCheckedContinuation: CheckedContinuation<Void, Error>?
 
     var isFetchSuspended: Bool {
         suspendedFetchContinuation != nil
+    }
+
+    var isDeleteCheckedSuspended: Bool {
+        suspendedDeleteCheckedContinuation != nil
     }
 
     func waitForSuspendedFetch() async {
@@ -213,9 +310,20 @@ private final class GroceryListRemoteSpy {
         }
     }
 
+    func waitForSuspendedDeleteChecked() async {
+        for _ in 0..<100 where suspendedDeleteCheckedContinuation == nil {
+            await Task.yield()
+        }
+    }
+
     func completeFetch(with items: [GroceryItem]) {
         suspendedFetchContinuation?.resume(returning: items)
         suspendedFetchContinuation = nil
+    }
+
+    func completeDeleteChecked() {
+        suspendedDeleteCheckedContinuation?.resume()
+        suspendedDeleteCheckedContinuation = nil
     }
 
     var client: GroceryListRemoteClient {
@@ -242,9 +350,14 @@ private final class GroceryListRemoteSpy {
                 deletedItemIDs.append(id)
                 if let deleteError { throw deleteError }
             },
-            deleteChecked: { [self] userId in
-                deleteCheckedUserIDs.append(userId)
+            deleteChecked: { [self] userId, itemIDs in
+                deleteCheckedRequests.append((userId, itemIDs))
                 if let deleteCheckedError { throw deleteCheckedError }
+                if shouldSuspendDeleteChecked {
+                    try await withCheckedThrowingContinuation { continuation in
+                        suspendedDeleteCheckedContinuation = continuation
+                    }
+                }
             }
         )
     }

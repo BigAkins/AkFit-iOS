@@ -384,7 +384,7 @@ struct SearchView: View {
     private var groceryListSection: some View {
         Section {
             ForEach(groceryStore.items) { item in
-                let isBusy = groceryStore.isItemBusy(item)
+                let isBusy = groceryStore.isItemBusy(item) || groceryStore.isClearingChecked
                 GroceryItemRow(item: item)
                     .contentShape(Rectangle())
                     .opacity(isBusy ? 0.55 : 1)

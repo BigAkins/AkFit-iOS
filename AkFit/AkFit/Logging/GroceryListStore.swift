@@ -40,6 +40,9 @@ final class GroceryListStore {
 
     private var busyItemIDs: Set<UUID> = []
     private var deletedItemIDs: Set<UUID> = []
+    private var confirmedWriteVersion = 0
+    private var activeFetchVersions: [UUID: Int] = [:]
+    private var recentlyConfirmedWrites: [UUID: RecentGroceryWrite] = [:]
 
     // MARK: - Dependencies
 
@@ -77,8 +80,15 @@ final class GroceryListStore {
     /// Called by `SearchView` on first appear. Non-fatal on network error.
     func fetchItems(userId: UUID) async {
         guard canApplyUserOwnedState(for: userId) else { return }
+        let fetchID = UUID()
+        let fetchStartedAtWriteVersion = confirmedWriteVersion
+        activeFetchVersions[fetchID] = fetchStartedAtWriteVersion
         isLoading = true
-        defer { isLoading = false }
+        defer {
+            isLoading = false
+            activeFetchVersions.removeValue(forKey: fetchID)
+            pruneRecentlyConfirmedWrites()
+        }
 
         // Guest path: load from GuestDataStore, sort by sort_order.
         if let gs = guestStore, gs.isActive {
@@ -90,7 +100,7 @@ final class GroceryListStore {
         do {
             let fetched = try await remote.fetchItems(userId)
             guard canApplyUserOwnedState(for: userId) else { return }
-            mergeFetchedItems(fetched)
+            mergeFetchedItems(fetched, fetchStartedAtWriteVersion: fetchStartedAtWriteVersion)
         } catch {
             guard canApplyUserOwnedState(for: userId) else { return }
             reportFailure(error, action: .fetch, surfaceToUser: false)
@@ -145,6 +155,7 @@ final class GroceryListStore {
             )
             let saved = try await remote.addItem(item)
             guard canApplyUserOwnedState(for: validUserId) else { return .ignored }
+            rememberConfirmedWrite(saved)
             items.append(saved)
             actionErrorMessage = nil
             return .succeeded
@@ -187,6 +198,9 @@ final class GroceryListStore {
             }
             try await remote.updateChecked(item.id, newChecked)
             guard canApplyUserOwnedState(for: userId) else { return .ignored }
+            if let updatedItem = items.first(where: { $0.id == item.id }) {
+                rememberConfirmedWrite(updatedItem)
+            }
             actionErrorMessage = nil
             return .succeeded
         } catch {
@@ -215,7 +229,7 @@ final class GroceryListStore {
         // Guest path: remove from GuestDataStore.
         if let gs = guestStore, gs.isActive {
             gs.deleteGroceryItem(id: item.id)
-            deletedItemIDs.insert(item.id)
+            rememberConfirmedDelete(ids: [item.id])
             items.removeAll { $0.id == item.id }
             actionErrorMessage = nil
             return .succeeded
@@ -232,7 +246,7 @@ final class GroceryListStore {
             }
             try await remote.deleteItem(item.id)
             guard canApplyUserOwnedState(for: userId) else { return .ignored }
-            deletedItemIDs.insert(item.id)
+            rememberConfirmedDelete(ids: [item.id])
             items.removeAll { $0.id == item.id }
             actionErrorMessage = nil
             return .succeeded
@@ -259,22 +273,22 @@ final class GroceryListStore {
         // Guest path: delegate bulk removal.
         if let gs = guestStore, gs.isActive {
             gs.clearCheckedGroceryItems()
-            deletedItemIDs.formUnion(checkedIDs)
+            rememberConfirmedDelete(ids: checkedIDs)
             items.removeAll { checkedIDs.contains($0.id) }
             actionErrorMessage = nil
             return .succeeded
         }
 
-        // Authenticated path: validate the session, then delete all checked
-        // rows for this user.
+        // Authenticated path: validate the session, then delete only the
+        // checked rows captured when the user tapped "Clear checked".
         do {
             let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
             guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
                 return .ignored
             }
-            try await remote.deleteChecked(validUserId)
+            try await remote.deleteChecked(validUserId, checkedIDs)
             guard canApplyUserOwnedState(for: validUserId) else { return .ignored }
-            deletedItemIDs.formUnion(checkedIDs)
+            rememberConfirmedDelete(ids: checkedIDs)
             items.removeAll { checkedIDs.contains($0.id) }
             actionErrorMessage = nil
             return .succeeded
@@ -298,16 +312,60 @@ final class GroceryListStore {
         actionErrorMessage = nil
         busyItemIDs        = []
         deletedItemIDs     = []
+        confirmedWriteVersion = 0
+        activeFetchVersions = [:]
+        recentlyConfirmedWrites = [:]
     }
 
-    private func mergeFetchedItems(_ fetched: [GroceryItem]) {
+    private func mergeFetchedItems(
+        _ fetched: [GroceryItem],
+        fetchStartedAtWriteVersion: Int
+    ) {
         let localByID = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0) })
-        let filtered = fetched
-            .filter { !deletedItemIDs.contains($0.id) }
-            .map { item in
-                busyItemIDs.contains(item.id) ? (localByID[item.id] ?? item) : item
+        var mergedByID: [UUID: GroceryItem] = [:]
+
+        for item in fetched where !deletedItemIDs.contains(item.id) {
+            if let recent = recentlyConfirmedWrites[item.id],
+               recent.version > fetchStartedAtWriteVersion {
+                mergedByID[item.id] = recent.item
+            } else if busyItemIDs.contains(item.id) {
+                mergedByID[item.id] = localByID[item.id] ?? item
+            } else {
+                mergedByID[item.id] = item
             }
-        items = filtered.sorted { $0.sortOrder < $1.sortOrder }
+        }
+
+        for recent in recentlyConfirmedWrites.values
+            where recent.version > fetchStartedAtWriteVersion &&
+                  !deletedItemIDs.contains(recent.item.id) {
+            mergedByID[recent.item.id] = recent.item
+        }
+
+        items = mergedByID.values.sorted { $0.sortOrder < $1.sortOrder }
+    }
+
+    private func rememberConfirmedWrite(_ item: GroceryItem) {
+        confirmedWriteVersion += 1
+        deletedItemIDs.remove(item.id)
+        recentlyConfirmedWrites[item.id] = RecentGroceryWrite(
+            item: item,
+            version: confirmedWriteVersion
+        )
+    }
+
+    private func rememberConfirmedDelete<S: Sequence>(ids: S) where S.Element == UUID {
+        confirmedWriteVersion += 1
+        for id in ids {
+            deletedItemIDs.insert(id)
+            recentlyConfirmedWrites.removeValue(forKey: id)
+        }
+    }
+
+    private func pruneRecentlyConfirmedWrites() {
+        let oldestActiveFetchVersion = activeFetchVersions.values.min() ?? confirmedWriteVersion
+        recentlyConfirmedWrites = recentlyConfirmedWrites.filter { id, write in
+            !deletedItemIDs.contains(id) && write.version > oldestActiveFetchVersion
+        }
     }
 
     @discardableResult
@@ -353,6 +411,11 @@ enum GroceryListActionResult: Equatable {
     }
 }
 
+private struct RecentGroceryWrite {
+    let item: GroceryItem
+    let version: Int
+}
+
 private enum GroceryListAction: String {
     case fetch
     case add
@@ -381,7 +444,7 @@ struct GroceryListRemoteClient {
     var addItem: (GroceryItem) async throws -> GroceryItem
     var updateChecked: (UUID, Bool) async throws -> Void
     var deleteItem: (UUID) async throws -> Void
-    var deleteChecked: (UUID) async throws -> Void
+    var deleteChecked: (UUID, Set<UUID>) async throws -> Void
 }
 
 extension GroceryListRemoteClient {
@@ -425,12 +488,13 @@ extension GroceryListRemoteClient {
                 .eq("id", value: id.uuidString)
                 .execute()
         },
-        deleteChecked: { userId in
+        deleteChecked: { userId, checkedIDs in
+            guard !checkedIDs.isEmpty else { return }
             try await SupabaseClientProvider.shared
                 .from("grocery_items")
                 .delete()
                 .eq("user_id", value: userId.uuidString)
-                .eq("is_checked", value: true)
+                .in("id", values: checkedIDs.map(\.uuidString))
                 .execute()
         }
     )
