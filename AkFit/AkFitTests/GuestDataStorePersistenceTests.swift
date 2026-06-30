@@ -5,7 +5,7 @@ import Testing
 struct GuestDataStorePersistenceTests {
 
     @Test func validPersistedGuestDataDecodesNormally() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let foodLog = makeFoodLog(name: "Chicken", mealSlot: .breakfast)
@@ -28,7 +28,7 @@ struct GuestDataStorePersistenceTests {
         defaults.set(try encode(["2026-06-29": "Meal prep"]), forKey: "guest.dailyNotes")
         defaults.set(try encode([groceryItem]), forKey: "guest.groceryItems")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.allFoodLogs.map(\.foodName) == ["Chicken"])
         #expect(store.allFoodLogs.first?.mealSlot == .breakfast)
@@ -36,10 +36,30 @@ struct GuestDataStorePersistenceTests {
         #expect(store.allWaterEntries.first?.amountMl == 473)
         #expect(store.dailyNote(for: "2026-06-29") == "Meal prep")
         #expect(store.allGroceryItems.first?.name == "Eggs")
+        #expect(defaults.data(forKey: "guest.foodLogs") == nil)
+        #expect(protectedData(for: "guest.foodLogs", directory: protectedDirectory) != nil)
+    }
+
+    @Test func newSensitiveGuestWritesUseProtectedStorageInsteadOfDefaults() throws {
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
+        defer { cleanup() }
+
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
+        store.appendFoodLog(makeFoodLog(name: "Protected Chicken", mealSlot: .lunch))
+        store.saveDailyNote("Prep tomorrow", for: "2026-06-30")
+
+        #expect(defaults.data(forKey: "guest.foodLogs") == nil)
+        #expect(defaults.data(forKey: "guest.dailyNotes") == nil)
+        #expect(protectedData(for: "guest.foodLogs", directory: protectedDirectory) != nil)
+        #expect(protectedData(for: "guest.dailyNotes", directory: protectedDirectory) != nil)
+
+        let reloaded = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
+        #expect(reloaded.allFoodLogs.map(\.foodName) == ["Protected Chicken"])
+        #expect(reloaded.dailyNote(for: "2026-06-30") == "Prep tomorrow")
     }
 
     @Test func missingMealSlotDefaultsToSnackWithoutOverwritingStorage() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let legacyData = try jsonData([
@@ -47,23 +67,24 @@ struct GuestDataStorePersistenceTests {
         ])
         defaults.set(legacyData, forKey: "guest.foodLogs")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.allFoodLogs.count == 1)
         #expect(store.allFoodLogs.first?.foodName == "Legacy Oats")
         #expect(store.allFoodLogs.first?.mealSlot == .snack)
-        #expect(defaults.data(forKey: "guest.foodLogs") == legacyData)
+        #expect(defaults.data(forKey: "guest.foodLogs") == nil)
+        #expect(protectedData(for: "guest.foodLogs", directory: protectedDirectory) == legacyData)
     }
 
     @Test func invalidMealSlotDefaultsToSnackWithoutDroppingItem() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         defaults.set(try jsonData([
             foodLogJSON(name: "Unknown Slot", mealSlot: "brunch")
         ]), forKey: "guest.foodLogs")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.allFoodLogs.count == 1)
         #expect(store.allFoodLogs.first?.foodName == "Unknown Slot")
@@ -71,7 +92,7 @@ struct GuestDataStorePersistenceTests {
     }
 
     @Test func partiallyCorruptFoodLogArrayPreservesValidItemsAndAppendKeepsRecoveredData() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let originalData = try jsonData([
@@ -81,33 +102,35 @@ struct GuestDataStorePersistenceTests {
         ])
         defaults.set(originalData, forKey: "guest.foodLogs")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.allFoodLogs.map(\.foodName) == ["Valid A", "Valid B"])
-        #expect(defaults.data(forKey: "guest.foodLogs") == originalData)
+        #expect(defaults.data(forKey: "guest.foodLogs") == nil)
+        #expect(protectedData(for: "guest.foodLogs", directory: protectedDirectory) == originalData)
 
         store.appendFoodLog(makeFoodLog(name: "New Log", mealSlot: .dinner))
 
-        let reloaded = GuestDataStore(defaults: defaults)
+        let reloaded = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
         #expect(reloaded.allFoodLogs.map(\.foodName) == ["Valid A", "Valid B", "New Log"])
         #expect(!reloaded.allFoodLogs.map(\.foodName).contains("Corrupt"))
     }
 
     @Test func unreadableFoodLogArrayDoesNotImmediatelyOverwriteStorageWithEmptyArray() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let corruptData = Data("{not-json".utf8)
         defaults.set(corruptData, forKey: "guest.foodLogs")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.allFoodLogs.isEmpty)
-        #expect(defaults.data(forKey: "guest.foodLogs") == corruptData)
+        #expect(defaults.data(forKey: "guest.foodLogs") == nil)
+        #expect(protectedData(for: "guest.foodLogs", directory: protectedDirectory) == corruptData)
     }
 
     @Test func groceryUpdateAndDeleteStillWorkAfterLossyDecode() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let validId = UUID()
@@ -118,25 +141,26 @@ struct GuestDataStorePersistenceTests {
         ])
         defaults.set(originalData, forKey: "guest.groceryItems")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
         #expect(store.allGroceryItems.map(\.name) == ["Milk"])
-        #expect(defaults.data(forKey: "guest.groceryItems") == originalData)
+        #expect(defaults.data(forKey: "guest.groceryItems") == nil)
+        #expect(protectedData(for: "guest.groceryItems", directory: protectedDirectory) == originalData)
 
         var updated = try #require(store.allGroceryItems.first)
         updated.isChecked = true
         store.updateGroceryItem(updated)
 
-        let reloadedAfterUpdate = GuestDataStore(defaults: defaults)
+        let reloadedAfterUpdate = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
         #expect(reloadedAfterUpdate.allGroceryItems.first?.isChecked == true)
 
         store.deleteGroceryItem(id: validId)
 
-        let reloadedAfterDelete = GuestDataStore(defaults: defaults)
+        let reloadedAfterDelete = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
         #expect(reloadedAfterDelete.allGroceryItems.isEmpty)
     }
 
     @Test func partiallyCorruptDailyNotesPreserveValidNotesWithoutImmediateOverwrite() throws {
-        let (defaults, cleanup) = try makeDefaults()
+        let (defaults, protectedDirectory, cleanup) = try makeDefaults()
         defer { cleanup() }
 
         let originalData = try jsonData([
@@ -145,11 +169,12 @@ struct GuestDataStorePersistenceTests {
         ])
         defaults.set(originalData, forKey: "guest.dailyNotes")
 
-        let store = GuestDataStore(defaults: defaults)
+        let store = GuestDataStore(defaults: defaults, protectedDirectory: protectedDirectory)
 
         #expect(store.dailyNote(for: "2026-06-29") == "High protein day")
         #expect(store.dailyNote(for: "2026-06-30") == nil)
-        #expect(defaults.data(forKey: "guest.dailyNotes") == originalData)
+        #expect(defaults.data(forKey: "guest.dailyNotes") == nil)
+        #expect(protectedData(for: "guest.dailyNotes", directory: protectedDirectory) == originalData)
     }
 }
 
@@ -158,13 +183,24 @@ struct GuestDataStorePersistenceTests {
 private let fixedDate = Date(timeIntervalSince1970: 1_720_000_000)
 private let fixedDateString = ISO8601DateFormatter().string(from: fixedDate)
 
-private func makeDefaults() throws -> (UserDefaults, () -> Void) {
+private func makeDefaults() throws -> (UserDefaults, URL, () -> Void) {
     let suiteName = "GuestDataStorePersistenceTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
+    let protectedDirectory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(suiteName, isDirectory: true)
     defaults.removePersistentDomain(forName: suiteName)
-    return (defaults, {
+    return (defaults, protectedDirectory, {
         defaults.removePersistentDomain(forName: suiteName)
+        try? FileManager.default.removeItem(at: protectedDirectory)
     })
+}
+
+private func protectedData(for key: String, directory: URL) -> Data? {
+    let fileURL = directory.appendingPathComponent(
+        GuestDataStore.protectedStorageFileName(for: key),
+        isDirectory: false
+    )
+    return try? Data(contentsOf: fileURL)
 }
 
 private func encode<T: Encodable>(_ value: T) throws -> Data {

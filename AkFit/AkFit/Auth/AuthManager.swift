@@ -10,7 +10,7 @@ import Supabase
 ///
 /// ## Guest mode
 /// When `userState == .guest`, profile, goal, and `currentUserId` are sourced
-/// from `GuestDataStore` (UserDefaults) — no Supabase calls are made for them.
+/// from `GuestDataStore` local persistence — no Supabase calls are made for them.
 /// All stores receive the same `GuestDataStore` reference and short-circuit to
 /// local reads/writes when `guestStore.isActive` is true.
 ///
@@ -182,7 +182,7 @@ final class AuthManager {
                 // No Supabase session — honour existing guest mode if active.
                 self.session = nil
                 if Self.isPasswordRecoveryPending {
-                    Self.setPasswordRecoveryPending(false)
+                    Self.clearPasswordRecoveryPersistence()
                     self.passwordRecoveryState = .invalidLink
                 }
                 if userState != .guest {
@@ -195,7 +195,7 @@ final class AuthManager {
             self.session = session
 
         case .signedOut, .userDeleted:
-            Self.setPasswordRecoveryPending(false)
+            Self.clearPasswordRecoveryPersistence()
             self.passwordRecoveryState = .inactive
             // Only change state if we were authenticated. Guest mode is not
             // affected by Supabase sign-out events (guests have no session).
@@ -412,10 +412,17 @@ final class AuthManager {
     }
 
     func sendPasswordReset(email: String) async throws {
-        try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(
-            email,
-            redirectTo: PasswordRecoveryLink.redirectURL
-        )
+        let state = PasswordRecoveryLink.makeState()
+        Self.setExpectedPasswordRecoveryState(state)
+        do {
+            try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(
+                email,
+                redirectTo: PasswordRecoveryLink.redirectURL(state: state)
+            )
+        } catch {
+            Self.setExpectedPasswordRecoveryState(nil)
+            throw error
+        }
     }
 
     /// Handles password-recovery links opened through the app's `akfit` URL
@@ -424,6 +431,12 @@ final class AuthManager {
     @discardableResult
     func handleIncomingURL(_ url: URL) async -> Bool {
         guard PasswordRecoveryLink.isRecoveryURL(url) else { return false }
+        guard Self.isExpectedPasswordRecoveryURL(url) else {
+            Self.setPasswordRecoveryPending(false)
+            passwordRecoveryState = .invalidLink
+            if isLoading { isLoading = false }
+            return true
+        }
 
         passwordRecoveryState = .processingLink
         Self.setPasswordRecoveryPending(true)
@@ -431,10 +444,11 @@ final class AuthManager {
 
         do {
             let recoveredSession = try await SupabaseClientProvider.shared.auth.session(from: url)
+            Self.setExpectedPasswordRecoveryState(nil)
             await applyAuthenticatedSession(recoveredSession)
             passwordRecoveryState = .ready
         } catch {
-            Self.setPasswordRecoveryPending(false)
+            Self.clearPasswordRecoveryPersistence()
             passwordRecoveryState = .invalidLink
         }
 
@@ -451,11 +465,11 @@ final class AuthManager {
             try await SupabaseClientProvider.shared.auth.update(
                 user: UserAttributes(password: password)
             )
-            Self.setPasswordRecoveryPending(false)
+            Self.clearPasswordRecoveryPersistence()
             passwordRecoveryState = .passwordUpdated
         } catch {
             if Self.isInvalidOrExpiredRecoveryError(error) {
-                Self.setPasswordRecoveryPending(false)
+                Self.clearPasswordRecoveryPersistence()
                 try? await SupabaseClientProvider.shared.auth.signOut(scope: .local)
                 clearAuthenticatedState()
                 passwordRecoveryState = .invalidLink
@@ -469,7 +483,7 @@ final class AuthManager {
         guard passwordRecoveryState == .invalidLink || passwordRecoveryState == .passwordUpdated else {
             return
         }
-        Self.setPasswordRecoveryPending(false)
+        Self.clearPasswordRecoveryPersistence()
         passwordRecoveryState = .inactive
     }
 
@@ -480,7 +494,7 @@ final class AuthManager {
         } catch {
             clearAuthenticatedState()
         }
-        Self.setPasswordRecoveryPending(false)
+        Self.clearPasswordRecoveryPersistence()
         clearAuthenticatedState()
         passwordRecoveryState = .inactive
     }
@@ -790,13 +804,45 @@ final class AuthManager {
     }
 
     private static let passwordRecoveryPendingKey = "akfit.auth.passwordRecoveryPending"
+    private static let passwordRecoveryExpectedStateKey = "akfit.auth.passwordRecoveryExpectedState"
 
     private static var isPasswordRecoveryPending: Bool {
         UserDefaults.standard.bool(forKey: passwordRecoveryPendingKey)
     }
 
     private static func setPasswordRecoveryPending(_ isPending: Bool) {
-        UserDefaults.standard.set(isPending, forKey: passwordRecoveryPendingKey)
+        if isPending {
+            UserDefaults.standard.set(true, forKey: passwordRecoveryPendingKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: passwordRecoveryPendingKey)
+        }
+    }
+
+    private static var expectedPasswordRecoveryState: String? {
+        guard let state = UserDefaults.standard.string(forKey: passwordRecoveryExpectedStateKey),
+              !state.isEmpty
+        else {
+            return nil
+        }
+        return state
+    }
+
+    private static func setExpectedPasswordRecoveryState(_ state: String?) {
+        if let state, !state.isEmpty {
+            UserDefaults.standard.set(state, forKey: passwordRecoveryExpectedStateKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: passwordRecoveryExpectedStateKey)
+        }
+    }
+
+    private static func clearPasswordRecoveryPersistence() {
+        setPasswordRecoveryPending(false)
+        setExpectedPasswordRecoveryState(nil)
+    }
+
+    private static func isExpectedPasswordRecoveryURL(_ url: URL) -> Bool {
+        guard let expected = expectedPasswordRecoveryState else { return false }
+        return PasswordRecoveryLink.state(in: url) == expected
     }
 
     private func debugDeleteAccount(_ message: String) {
@@ -849,7 +895,20 @@ enum PasswordRecoveryState: Equatable {
 }
 
 enum PasswordRecoveryLink {
-    static let redirectURL = URL(string: "akfit://auth-callback?flow=password-recovery")!
+    static func makeState() -> String {
+        UUID().uuidString.lowercased()
+    }
+
+    static func redirectURL(state: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "akfit"
+        components.host = "auth-callback"
+        components.queryItems = [
+            URLQueryItem(name: "flow", value: "password-recovery"),
+            URLQueryItem(name: "state", value: state),
+        ]
+        return components.url!
+    }
 
     static func isRecoveryURL(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "akfit" else { return false }
@@ -860,6 +919,10 @@ enum PasswordRecoveryLink {
         if params["type"] == "recovery" { return true }
 
         return false
+    }
+
+    static func state(in url: URL) -> String? {
+        parameters(in: url)["state"]
     }
 
     private static func parameters(in url: URL) -> [String: String] {

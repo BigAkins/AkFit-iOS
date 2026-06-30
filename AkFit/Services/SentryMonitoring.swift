@@ -19,6 +19,17 @@ enum SentryMonitoring {
             options.sessionReplay.onErrorSampleRate = 1.0
             options.sessionReplay.maskAllText = true
             options.sessionReplay.maskAllImages = true
+            options.enableNetworkBreadcrumbs = false
+            options.enableNetworkTracking = false
+            options.enableCaptureFailedRequests = false
+            options.beforeSend = { event in
+                scrub(event)
+                return event
+            }
+            options.beforeBreadcrumb = { breadcrumb in
+                scrub(breadcrumb)
+                return breadcrumb
+            }
         }
 
         #if DEBUG
@@ -50,5 +61,107 @@ enum SentryMonitoring {
                 scope.setTag(value: value, key: "akfit.\(key)")
             }
         }
+    }
+
+    nonisolated static func scrub(_ event: Event) {
+        if let request = event.request {
+            scrub(request)
+        }
+        if let breadcrumbs = event.breadcrumbs {
+            breadcrumbs.forEach(scrub)
+        }
+    }
+
+    nonisolated static func scrub(_ breadcrumb: Breadcrumb) {
+        breadcrumb.message = breadcrumb.message.map(scrubURLsInText)
+        guard let data = breadcrumb.data else { return }
+        breadcrumb.data = scrubTelemetryDictionary(data)
+    }
+
+    nonisolated static func scrub(_ request: SentryRequest) {
+        request.url = request.url.map(redactedURLString)
+        request.queryString = nil
+        request.fragment = nil
+        request.cookies = nil
+        request.headers = request.headers.map(sanitizedHeaders)
+    }
+
+    nonisolated static func redactedURLString(_ value: String) -> String {
+        guard var components = URLComponents(string: value),
+              let scheme = components.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              components.host != nil
+        else {
+            return value
+        }
+
+        components.user = nil
+        components.password = nil
+        components.query = nil
+        components.fragment = nil
+        return components.string ?? value
+    }
+
+    nonisolated static func scrubTelemetryDictionary(_ dictionary: [String: Any]) -> [String: Any] {
+        dictionary.reduce(into: [:]) { result, element in
+            result[element.key] = scrubTelemetryValue(element.value, key: element.key)
+        }
+    }
+
+    nonisolated private static func scrubTelemetryValue(_ value: Any, key: String) -> Any {
+        let normalizedKey = key.lowercased()
+        if isSensitiveTelemetryKey(normalizedKey) {
+            return "[redacted]"
+        }
+
+        if let string = value as? String {
+            if normalizedKey.contains("url") {
+                return redactedURLString(string)
+            }
+            return scrubURLsInText(string)
+        }
+
+        if let nested = value as? [String: Any] {
+            return scrubTelemetryDictionary(nested)
+        }
+
+        if let array = value as? [Any] {
+            return array.map { scrubTelemetryValue($0, key: key) }
+        }
+
+        return value
+    }
+
+    nonisolated private static func sanitizedHeaders(_ headers: [String: String]) -> [String: String] {
+        headers.reduce(into: [:]) { result, element in
+            if isSensitiveTelemetryKey(element.key.lowercased()) {
+                result[element.key] = "[redacted]"
+            } else {
+                result[element.key] = element.value
+            }
+        }
+    }
+
+    nonisolated private static func isSensitiveTelemetryKey(_ key: String) -> Bool {
+        key.contains("authorization") ||
+        key == "apikey" ||
+        key.contains("cookie") ||
+        key.contains("token") ||
+        key.contains("secret") ||
+        key.contains("password") ||
+        key.contains("query") ||
+        key.contains("fragment")
+    }
+
+    nonisolated private static func scrubURLsInText(_ text: String) -> String {
+        let pieces = text.split(separator: " ", omittingEmptySubsequences: false)
+        return pieces
+            .map { piece in
+                let string = String(piece)
+                return string.hasPrefix("http://") || string.hasPrefix("https://")
+                    ? redactedURLString(string)
+                    : string
+            }
+            .joined(separator: " ")
     }
 }

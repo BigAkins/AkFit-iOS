@@ -15,16 +15,23 @@ struct PasswordRecoveryValidationTests {
 
     @Test func shortPassword_isRejected() {
         #expect(
-            PasswordRecoveryValidation.validate(password: "12345", confirmation: "12345")
+            PasswordRecoveryValidation.validate(password: "Password123", confirmation: "Password123")
                 == .passwordTooShort
+        )
+    }
+
+    @Test func passwordWithoutRequiredCharacters_isRejected() {
+        #expect(
+            PasswordRecoveryValidation.validate(password: "password1234", confirmation: "password1234")
+                == .passwordMissingRequiredCharacters
         )
     }
 
     @Test func mismatchedPasswords_areRejected() {
         #expect(
             PasswordRecoveryValidation.validate(
-                password: "123456",
-                confirmation: "654321"
+                password: "Password1234",
+                confirmation: "Password5678"
             ) == .passwordMismatch
         )
     }
@@ -32,8 +39,8 @@ struct PasswordRecoveryValidationTests {
     @Test func matchingValidPasswords_pass() {
         #expect(
             PasswordRecoveryValidation.validate(
-                password: "123456",
-                confirmation: "123456"
+                password: "Password1234",
+                confirmation: "Password1234"
             ) == .valid
         )
     }
@@ -43,25 +50,30 @@ struct PasswordRecoveryValidationTests {
 struct PasswordRecoveryLinkTests {
 
     @Test func redirectURL_reusesAkFitAuthCallbackScheme() {
-        #expect(PasswordRecoveryLink.redirectURL.scheme == "akfit")
-        #expect(PasswordRecoveryLink.redirectURL.host == "auth-callback")
-        #expect(PasswordRecoveryLink.isRecoveryURL(PasswordRecoveryLink.redirectURL))
+        let url = PasswordRecoveryLink.redirectURL(state: "state-123")
+
+        #expect(url.scheme == "akfit")
+        #expect(url.host == "auth-callback")
+        #expect(PasswordRecoveryLink.isRecoveryURL(url))
+        #expect(PasswordRecoveryLink.state(in: url) == "state-123")
     }
 
     @Test func recoveryURLWithError_isStillHandledForGracefulFailure() throws {
         let url = try #require(
-            URL(string: "akfit://auth-callback?flow=password-recovery&error_code=flow_state_expired")
+            URL(string: "akfit://auth-callback?flow=password-recovery&state=state-123&error_code=flow_state_expired")
         )
 
         #expect(PasswordRecoveryLink.isRecoveryURL(url))
+        #expect(PasswordRecoveryLink.state(in: url) == "state-123")
     }
 
     @Test func implicitRecoveryFragment_isRecognized() throws {
         let url = try #require(
-            URL(string: "akfit://auth-callback#access_token=token&type=recovery")
+            URL(string: "akfit://auth-callback#access_token=token&type=recovery&state=state-123")
         )
 
         #expect(PasswordRecoveryLink.isRecoveryURL(url))
+        #expect(PasswordRecoveryLink.state(in: url) == "state-123")
     }
 
     @Test func plainAuthCallback_isNotTreatedAsRecovery() throws {

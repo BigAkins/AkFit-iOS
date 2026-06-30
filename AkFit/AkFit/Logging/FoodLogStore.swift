@@ -8,7 +8,7 @@ import Supabase
 ///
 /// ## Guest mode
 /// When `guestStore.isActive` is `true`, all operations read from and write to
-/// `GuestDataStore` (UserDefaults) instead of Supabase. The in-memory derived
+/// `GuestDataStore` local persistence instead of Supabase. The in-memory derived
 /// lists (`todayLogs`, `recentFoods`, `weekLogs`) are populated the same way
 /// in both modes so views need no conditional logic.
 ///

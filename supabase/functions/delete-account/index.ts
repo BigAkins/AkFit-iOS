@@ -23,7 +23,7 @@
 //   grant access to any AkFit resource. Revocation can be added post-launch.
 // =============================================================================
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'npm:@supabase/supabase-js@2.108.2'
 
 const responseHeaders = {
   'Access-Control-Allow-Origin': '*',

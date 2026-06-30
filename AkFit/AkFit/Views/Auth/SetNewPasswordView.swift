@@ -1,16 +1,28 @@
 import SwiftUI
 
-enum PasswordRecoveryValidation: Equatable {
-    static let minimumLength = 6
+enum PasswordPolicy {
+    static let minimumLength = 12
+    static let requirementMessage = "Minimum \(minimumLength) characters with uppercase, lowercase, and a number."
 
+    static func isValid(_ password: String) -> Bool {
+        password.count >= minimumLength &&
+        password.rangeOfCharacter(from: .lowercaseLetters) != nil &&
+        password.rangeOfCharacter(from: .uppercaseLetters) != nil &&
+        password.rangeOfCharacter(from: .decimalDigits) != nil
+    }
+}
+
+enum PasswordRecoveryValidation: Equatable {
     case valid
     case emptyPassword
     case passwordTooShort
+    case passwordMissingRequiredCharacters
     case passwordMismatch
 
     static func validate(password: String, confirmation: String) -> PasswordRecoveryValidation {
         if password.isEmpty && confirmation.isEmpty { return .emptyPassword }
-        if password.count < minimumLength { return .passwordTooShort }
+        if password.count < PasswordPolicy.minimumLength { return .passwordTooShort }
+        if !PasswordPolicy.isValid(password) { return .passwordMissingRequiredCharacters }
         if password != confirmation { return .passwordMismatch }
         return .valid
     }
@@ -22,7 +34,9 @@ enum PasswordRecoveryValidation: Equatable {
         case .emptyPassword:
             return "Enter a new password."
         case .passwordTooShort:
-            return "Minimum \(Self.minimumLength) characters."
+            return PasswordPolicy.requirementMessage
+        case .passwordMissingRequiredCharacters:
+            return PasswordPolicy.requirementMessage
         case .passwordMismatch:
             return "Passwords do not match."
         }

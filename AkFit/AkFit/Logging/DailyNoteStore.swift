@@ -8,7 +8,7 @@ import Supabase
 ///
 /// ## Guest mode
 /// When `guestStore.isActive` is true, the note is read from and written to
-/// `GuestDataStore` (UserDefaults). The in-memory `todayContent` string is
+/// `GuestDataStore` local persistence. The in-memory `todayContent` string is
 /// kept in sync in both modes so views need no conditional logic.
 ///
 /// ## Save behaviour
