@@ -108,6 +108,11 @@ final class AuthManager {
         userState == .authenticated ? session?.user.email : nil
     }
 
+    /// `true` when the current Supabase session includes a Sign in with Apple identity.
+    var requiresAppleReauthorizationForAccountDeletion: Bool {
+        session?.user.hasAppleIdentity == true
+    }
+
     /// `true` while a recovery link is being handled, the user is setting a
     /// new password, or the recovery result needs to stay on screen.
     var isPasswordRecoveryPresented: Bool {
@@ -555,29 +560,33 @@ final class AuthManager {
     /// `authStateChanges` stream fires `.signedOut`, `userState` becomes
     /// `.signedOut`, and `RootView` routes to `AuthView` automatically.
     ///
-    /// **Sign in with Apple:** the Apple token becomes orphaned after deletion
-    /// (any credential check returns `.notFound`). Full cryptographic revocation
-    /// via Apple's `/auth/revoke` endpoint requires the Apple private key on the
-    /// server — that infrastructure is not yet in place. The account and all
-    /// data are permanently removed here.
-    func deleteAccount() async throws {
+    /// **Sign in with Apple:** Apple-backed accounts must pass a fresh Apple
+    /// authorization code. The Edge Function exchanges/revokes that grant before
+    /// deleting the Supabase user. The code is never logged or persisted.
+    func deleteAccount(appleAuthorizationCode: String? = nil) async throws {
         guard session != nil else {
             throw DeleteAccountError.notAuthenticated
         }
 
         let validSession = try await resolveDeleteAccountSession()
+        let trimmedAppleCode = appleAuthorizationCode?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldRevokeApple = validSession.user.hasAppleIdentity
+        if shouldRevokeApple, trimmedAppleCode?.isEmpty != false {
+            throw DeleteAccountError.appleAuthorizationRequired
+        }
+        let requestBody = DeleteAccountRequest(appleAuthorizationCode: trimmedAppleCode)
 
         do {
-            debugDeleteAccount(
-                "invoking delete-account with session JWT \(maskedToken(validSession.accessToken))"
-            )
+            debugDeleteAccount("invoking delete-account, appleRevocationRequired=\(shouldRevokeApple)")
             try await SupabaseClientProvider.shared.functions
                 .invoke(
                     "delete-account",
                     options: FunctionInvokeOptions(
                         headers: [
                             "Authorization": "Bearer \(validSession.accessToken)"
-                        ]
+                        ],
+                        body: requestBody
                     )
                 )
         } catch {
@@ -688,13 +697,12 @@ final class AuthManager {
             switch functionError {
             case .relayError:
                 return "relay error"
-            case let .httpError(code, data):
-                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                return "http \(code), body: \(body)"
+            case let .httpError(code, _):
+                return "http \(code)"
             }
         }
 
-        return String(describing: error)
+        return "unexpected error"
     }
 
     private func resolveDeleteAccountSession() async throws -> Session {
@@ -712,7 +720,7 @@ final class AuthManager {
             validSession = try await auth.session
             session = validSession
             debugDeleteAccount(
-                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                "using session for current user, expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
             )
         } catch {
             debugDeleteAccount("failed to resolve valid session before deletion: \(describeDeleteAccountAuthError(error))")
@@ -734,7 +742,7 @@ final class AuthManager {
                 validSession = try await auth.refreshSession(refreshToken: validSession.refreshToken)
                 session = validSession
                 debugDeleteAccount(
-                    "refreshed session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                    "refreshed session for current user, expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
                 )
                 _ = try await auth.user(jwt: validSession.accessToken)
                 debugDeleteAccount("validated refreshed session JWT against current Supabase project")
@@ -753,17 +761,16 @@ final class AuthManager {
     private func describeDeleteAccountAuthError(_ error: Error) -> String {
         if let authError = error as? AuthError {
             switch authError {
-            case let .api(message, errorCode, underlyingData, underlyingResponse):
-                let body = String(data: underlyingData, encoding: .utf8) ?? "<non-utf8 body>"
-                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue), message: \(message), body: \(body)"
-            case let .jwtVerificationFailed(message):
-                return "jwt verification failed: \(message)"
+            case let .api(_, errorCode, _, underlyingResponse):
+                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue)"
+            case .jwtVerificationFailed:
+                return "jwt verification failed"
             default:
-                return authError.localizedDescription
+                return "auth error"
             }
         }
 
-        return String(describing: error)
+        return "unexpected error"
     }
 
     private func isInvalidJWTError(_ error: Error) -> Bool {
@@ -856,16 +863,15 @@ final class AuthManager {
         #endif
     }
 
-    private func maskedToken(_ token: String) -> String {
-        let suffix = String(token.suffix(8))
-        return "<len:\(token.count) suffix:\(suffix)>"
-    }
-
     private func debugAuthWrite(_ message: String) {
         #if DEBUG
         print("[AuthWrite] \(message)")
         #endif
     }
+}
+
+private struct DeleteAccountRequest: Encodable {
+    let appleAuthorizationCode: String?
 }
 
 // MARK: - Account deletion error
@@ -876,6 +882,8 @@ final class AuthManager {
 enum DeleteAccountError: LocalizedError {
     /// No active Supabase session — the user must sign in again.
     case notAuthenticated
+    /// Sign in with Apple requires a fresh grant before account deletion.
+    case appleAuthorizationRequired
     /// The Edge Function returned an error or the network request failed.
     case serverError
 
@@ -883,9 +891,28 @@ enum DeleteAccountError: LocalizedError {
         switch self {
         case .notAuthenticated:
             return "No active session. Please sign in again before deleting your account."
+        case .appleAuthorizationRequired:
+            return "Please confirm with Sign in with Apple before deleting this account."
         case .serverError:
             return "Account deletion failed. Please check your connection and try again."
         }
+    }
+}
+
+extension User {
+    var hasAppleIdentity: Bool {
+        if identities?.contains(where: { $0.provider.caseInsensitiveCompare("apple") == .orderedSame }) == true {
+            return true
+        }
+
+        if let provider = appMetadata["provider"]?.stringValue,
+           provider.caseInsensitiveCompare("apple") == .orderedSame {
+            return true
+        }
+
+        let providers = appMetadata["providers"]?.arrayValue?
+            .compactMap(\.stringValue) ?? []
+        return providers.contains { $0.caseInsensitiveCompare("apple") == .orderedSame }
     }
 }
 
