@@ -4,8 +4,7 @@ enum AppConfig {
     static let supabaseURL: URL = {
         if
             let raw = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String,
-            let url = URL(string: raw),
-            let host = url.host, !host.isEmpty
+            let url = validatedSupabaseURL(raw)
         {
             return url
         }
@@ -18,6 +17,16 @@ enum AppConfig {
             "note: use $()/ to escape // in xcconfig files."
         )
     }()
+
+    static func validatedSupabaseURL(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("$(") else { return nil }
+        guard let components = URLComponents(string: trimmed) else { return nil }
+        guard components.scheme?.lowercased() == "https" else { return nil }
+        guard let host = components.host, !host.isEmpty else { return nil }
+        guard components.user == nil, components.password == nil else { return nil }
+        return components.url
+    }
 
     static let supabaseAnonKey: String = {
         if

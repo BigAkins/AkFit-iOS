@@ -1,0 +1,50 @@
+name: Supabase Production Drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 12 * * 1"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/supabase-production-drift.yml"
+      - "scripts/supabase/check-production-drift.sh"
+      - "supabase/checks/production_drift.sql"
+      - "supabase/migrations/**"
+      - "AkFit/AkFit/Models/**"
+      - "AkFit/Services/Supabase/**"
+
+permissions:
+  contents: read
+
+jobs:
+  production-drift:
+    name: Production database drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        # This workflow uses production DB credentials later, so pin actions.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client
+
+      - name: Verify production database drift
+        shell: bash
+        env:
+          SUPABASE_PROD_DB_HOST: ${{ secrets.SUPABASE_PROD_DB_HOST }}
+          SUPABASE_PROD_DB_PORT: ${{ secrets.SUPABASE_PROD_DB_PORT }}
+          SUPABASE_PROD_DB_NAME: ${{ secrets.SUPABASE_PROD_DB_NAME }}
+          SUPABASE_PROD_DB_USER: ${{ secrets.SUPABASE_PROD_DB_USER }}
+          SUPABASE_PROD_DB_PASSWORD: ${{ secrets.SUPABASE_PROD_DB_PASSWORD }}
+          SUPABASE_PROD_DB_SSLMODE: ${{ secrets.SUPABASE_PROD_DB_SSLMODE }}
+        run: |
+          set -euo pipefail
+          scripts/supabase/check-production-drift.sh

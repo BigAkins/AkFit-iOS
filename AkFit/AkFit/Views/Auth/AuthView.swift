@@ -80,10 +80,9 @@ struct AuthView: View {
                     isSecure: true
                 )
 
-                // Inline hint — only shown when the user has typed something
-                // too short. Avoids a confusing disabled-button state with no explanation.
-                if !password.isEmpty && password.count < 6 {
-                    Text("Minimum 6 characters")
+                // Inline hint — only shown for new passwords that don't meet policy.
+                if mode == .signUp && !password.isEmpty && !PasswordPolicy.isValid(password) {
+                    Text(PasswordPolicy.requirementMessage)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -92,10 +91,10 @@ struct AuthView: View {
                 }
             }
             .padding(.horizontal, 24)
-            .animation(.easeInOut(duration: 0.15), value: password.count < 6 && !password.isEmpty)
+            .animation(.easeInOut(duration: 0.15), value: mode == .signUp && !PasswordPolicy.isValid(password) && !password.isEmpty)
 
             // Forgot password — sign-in mode only. Shows an alert after the reset
-            // email fires so the user knows to check their inbox.
+            // email fires so the user knows to open the recovery link here.
             if mode == .signIn {
                 HStack {
                     Spacer()
@@ -300,7 +299,7 @@ struct AuthView: View {
             defer { isResettingPassword = false }
             do {
                 try await authManager.sendPasswordReset(email: trimmed)
-                resetAlertMessage = "A reset link has been sent to \(trimmed). Check your inbox."
+                resetAlertMessage = "Check your email for a recovery link. Open it on this device to create a new password."
             } catch {
                 resetAlertMessage = "Couldn't send reset email. Please try again."
             }
@@ -310,8 +309,13 @@ struct AuthView: View {
     // MARK: - Validation & submission
 
     private var isFormValid: Bool {
-        !email.trimmingCharacters(in: .whitespaces).isEmpty &&
-        password.count >= 6
+        guard !email.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
+        switch mode {
+        case .signIn:
+            return !password.isEmpty
+        case .signUp:
+            return PasswordPolicy.isValid(password)
+        }
     }
 
     private func submit() {

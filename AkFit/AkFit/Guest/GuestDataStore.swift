@@ -1,4 +1,10 @@
 import Foundation
+import OSLog
+
+private let guestDataLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "AkFit",
+    category: "GuestDataStore"
+)
 
 // MARK: - App user state
 
@@ -11,7 +17,7 @@ enum AppUserState: Equatable {
     /// Not signed in and not in guest mode. `RootView` shows `AuthView`.
     case signedOut
     /// Using the app locally as a guest. No Supabase session exists.
-    /// All data is stored in `GuestDataStore` (UserDefaults).
+    /// All data is stored in `GuestDataStore` local persistence.
     case guest
     /// Signed in with a Supabase account. Data is stored in the backend.
     case authenticated
@@ -19,11 +25,11 @@ enum AppUserState: Equatable {
 
 // MARK: - GuestDataStore
 
-/// Owns all local UserDefaults persistence for guest mode.
+/// Owns all local persistence for guest mode.
 ///
 /// A single instance is created at app launch (`AkFitApp.init`) and injected
 /// into `AuthManager` plus each logging store so they all share the same data.
-/// **All UserDefaults reads and writes for guest data happen exclusively here.**
+/// **All guest data reads and writes happen exclusively here.**
 ///
 /// ## What is stored
 /// | Key                  | Value                                  |
@@ -37,9 +43,9 @@ enum AppUserState: Equatable {
 /// | `guest.waterEntries`   | All `[WaterEntry]` entries           |
 ///
 /// ## Security
-/// No Supabase credentials, tokens, or session data are stored here.
-/// Only nutritional and body-composition data explicitly entered by the user
-/// is persisted. All data is isolated to `UserDefaults.standard`.
+/// No Supabase credentials, tokens, or session data are stored here. Sensitive
+/// nutrition/body payloads are stored in protected Application Support files;
+/// `UserDefaults` keeps only guest identity and mode flags.
 @Observable
 final class GuestDataStore {
 
@@ -57,7 +63,18 @@ final class GuestDataStore {
         static let groceryItems   = "guest.groceryItems"
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    private let protectedStorage: ProtectedGuestStorage
+
+    private static let protectedKeys: Set<String> = [
+        Keys.goal,
+        Keys.profile,
+        Keys.foodLogs,
+        Keys.bodyweightLogs,
+        Keys.waterEntries,
+        Keys.dailyNotes,
+        Keys.groceryItems,
+    ]
 
     // MARK: - JSON codec
     //
@@ -120,8 +137,11 @@ final class GuestDataStore {
 
     // MARK: - Init
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard, protectedDirectory: URL? = nil) {
+        self.defaults = defaults
+        self.protectedStorage = ProtectedGuestStorage(
+            directory: protectedDirectory ?? Self.defaultProtectedDirectory()
+        )
 
         // Load or create the stable guest UUID.
         if let stored = defaults.string(forKey: Keys.guestId),
@@ -135,17 +155,18 @@ final class GuestDataStore {
 
         // Load runtime flags and user data.
         self.isActive = defaults.bool(forKey: Keys.isActive)
-        self.goal     = Self.load(UserGoal.self,   key: Keys.goal)
-        self.profile  = Self.load(UserProfile.self, key: Keys.profile)
+        self.goal     = Self.load(UserGoal.self,    key: Keys.goal,    defaults: defaults, protectedStorage: protectedStorage)
+        self.profile  = Self.load(UserProfile.self, key: Keys.profile, defaults: defaults, protectedStorage: protectedStorage)
 
-        // Load log arrays (default to empty if nothing persisted yet).
-        self.allFoodLogs       = Self.load([FoodLog].self,         key: Keys.foodLogs)       ?? []
-        self.allBodyweightLogs = Self.load([BodyweightLog].self,   key: Keys.bodyweightLogs) ?? []
-        self.allWaterEntries   = Self.load([WaterEntry].self,      key: Keys.waterEntries)   ?? []
+        // Load log arrays lossily so one legacy/corrupt row cannot wipe the
+        // whole guest history on the next write.
+        self.allFoodLogs       = Self.loadLossyArray(FoodLog.self,       key: Keys.foodLogs,       defaults: defaults, protectedStorage: protectedStorage)
+        self.allBodyweightLogs = Self.loadLossyArray(BodyweightLog.self, key: Keys.bodyweightLogs, defaults: defaults, protectedStorage: protectedStorage)
+        self.allWaterEntries   = Self.loadLossyArray(WaterEntry.self,    key: Keys.waterEntries,   defaults: defaults, protectedStorage: protectedStorage)
 
         // Load planning data (default to empty).
-        self.dailyNotes     = Self.load([String: String].self, key: Keys.dailyNotes)   ?? [:]
-        self.allGroceryItems = Self.load([GroceryItem].self,   key: Keys.groceryItems) ?? []
+        self.dailyNotes      = Self.loadStringDictionary(key: Keys.dailyNotes, defaults: defaults, protectedStorage: protectedStorage)
+        self.allGroceryItems = Self.loadLossyArray(GroceryItem.self, key: Keys.groceryItems, defaults: defaults, protectedStorage: protectedStorage)
     }
 
     // MARK: - Activation
@@ -269,20 +290,292 @@ final class GuestDataStore {
                     Keys.waterEntries, Keys.dailyNotes, Keys.groceryItems] {
             defaults.removeObject(forKey: key)
         }
+        protectedStorage.removeAll(keys: Self.protectedKeys)
     }
 
     // MARK: - Private helpers
 
     private func persist<T: Encodable>(_ value: T?, key: String) {
-        guard let value, let data = try? Self.encoder.encode(value) else {
-            defaults.removeObject(forKey: key)
+        guard let value else {
+            removePersistedValue(forKey: key)
             return
         }
-        defaults.set(data, forKey: key)
+
+        do {
+            let data = try Self.encoder.encode(value)
+            try persist(data, key: key)
+        } catch {
+            Self.reportPersistenceIssue(
+                error,
+                key: key,
+                reason: "encode_or_write_failed"
+            )
+        }
     }
 
-    private static func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? decoder.decode(type, from: data)
+    private func persist(_ data: Data, key: String) throws {
+        if Self.protectedKeys.contains(key) {
+            try protectedStorage.write(data, forKey: key)
+            defaults.removeObject(forKey: key)
+        } else {
+            defaults.set(data, forKey: key)
+        }
     }
+
+    private func removePersistedValue(forKey key: String) {
+        defaults.removeObject(forKey: key)
+        if Self.protectedKeys.contains(key) {
+            protectedStorage.remove(key)
+        }
+    }
+
+    private static func load<T: Decodable>(
+        _ type: T.Type,
+        key: String,
+        defaults: UserDefaults,
+        protectedStorage: ProtectedGuestStorage
+    ) -> T? {
+        guard let data = persistedData(forKey: key, defaults: defaults, protectedStorage: protectedStorage) else { return nil }
+        do {
+            return try decoder.decode(type, from: data)
+        } catch {
+            reportDecodeIssue(
+                error,
+                key: key,
+                typeName: String(describing: T.self),
+                reason: "decode_failed",
+                droppedCount: 0,
+                totalCount: 1
+            )
+            return nil
+        }
+    }
+
+    private static func loadLossyArray<T: Decodable>(
+        _ elementType: T.Type,
+        key: String,
+        defaults: UserDefaults,
+        protectedStorage: ProtectedGuestStorage
+    ) -> [T] {
+        guard let data = persistedData(forKey: key, defaults: defaults, protectedStorage: protectedStorage) else { return [] }
+
+        do {
+            let decoded = try decoder.decode([LossyElement<T>].self, from: data)
+            let values = decoded.compactMap(\.value)
+            let dropped = decoded.count - values.count
+            if dropped > 0 {
+                reportDecodeIssue(
+                    GuestDataDecodeIssue.partialCollection,
+                    key: key,
+                    typeName: "[\(String(describing: elementType))]",
+                    reason: "partial_collection",
+                    droppedCount: dropped,
+                    totalCount: decoded.count
+                )
+            }
+            return values
+        } catch {
+            reportDecodeIssue(
+                error,
+                key: key,
+                typeName: "[\(String(describing: elementType))]",
+                reason: "collection_decode_failed",
+                droppedCount: 0,
+                totalCount: 0
+            )
+            return []
+        }
+    }
+
+    private static func loadStringDictionary(
+        key: String,
+        defaults: UserDefaults,
+        protectedStorage: ProtectedGuestStorage
+    ) -> [String: String] {
+        guard let data = persistedData(forKey: key, defaults: defaults, protectedStorage: protectedStorage) else { return [:] }
+
+        do {
+            return try decoder.decode([String: String].self, from: data)
+        } catch {
+            do {
+                let object = try JSONSerialization.jsonObject(with: data)
+                guard let rawDictionary = object as? [String: Any] else { throw error }
+
+                var recovered: [String: String] = [:]
+                var dropped = 0
+                for (rawKey, rawValue) in rawDictionary {
+                    if let value = rawValue as? String {
+                        recovered[rawKey] = value
+                    } else {
+                        dropped += 1
+                    }
+                }
+
+                if dropped > 0 {
+                    reportDecodeIssue(
+                        GuestDataDecodeIssue.partialCollection,
+                        key: key,
+                        typeName: "[String: String]",
+                        reason: "partial_dictionary",
+                        droppedCount: dropped,
+                        totalCount: rawDictionary.count
+                    )
+                }
+                return recovered
+            } catch {
+                reportDecodeIssue(
+                    error,
+                    key: key,
+                    typeName: "[String: String]",
+                    reason: "dictionary_decode_failed",
+                    droppedCount: 0,
+                    totalCount: 0
+                )
+                return [:]
+            }
+        }
+    }
+
+    private static func persistedData(
+        forKey key: String,
+        defaults: UserDefaults,
+        protectedStorage: ProtectedGuestStorage
+    ) -> Data? {
+        guard protectedKeys.contains(key) else {
+            return defaults.data(forKey: key)
+        }
+
+        if let data = protectedStorage.data(forKey: key) {
+            return data
+        }
+
+        guard let legacyData = defaults.data(forKey: key) else { return nil }
+        do {
+            try protectedStorage.write(legacyData, forKey: key)
+            defaults.removeObject(forKey: key)
+        } catch {
+            reportPersistenceIssue(error, key: key, reason: "protected_migration_failed")
+        }
+        return legacyData
+    }
+
+    private static func defaultProtectedDirectory() -> URL {
+        let base = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("GuestData", isDirectory: true)
+    }
+
+    static func protectedStorageFileName(for key: String) -> String {
+        key
+            .replacingOccurrences(of: "/", with: "_")
+            .appending(".json")
+    }
+
+    private static func reportDecodeIssue(
+        _ error: Error,
+        key: String,
+        typeName: String,
+        reason: String,
+        droppedCount: Int,
+        totalCount: Int
+    ) {
+        guestDataLogger.error(
+            "guest persistence issue key=\(key, privacy: .public) type=\(typeName, privacy: .public) reason=\(reason, privacy: .public) dropped=\(droppedCount, privacy: .public) total=\(totalCount, privacy: .public)"
+        )
+        SentryMonitoring.captureNonFatal(
+            error,
+            operation: "guest_persistence_decode",
+            tags: [
+                "key": key,
+                "type": typeName,
+                "reason": reason,
+                "dropped_count": String(droppedCount),
+                "total_count": String(totalCount),
+            ]
+        )
+    }
+
+    private static func reportPersistenceIssue(
+        _ error: Error,
+        key: String,
+        reason: String
+    ) {
+        guestDataLogger.error(
+            "guest persistence issue key=\(key, privacy: .public) reason=\(reason, privacy: .public)"
+        )
+        SentryMonitoring.captureNonFatal(
+            error,
+            operation: "guest_persistence",
+            tags: [
+                "key": key,
+                "reason": reason,
+            ]
+        )
+    }
+}
+
+private struct ProtectedGuestStorage {
+    let directory: URL
+
+    func data(forKey key: String) -> Data? {
+        try? Data(contentsOf: fileURL(forKey: key))
+    }
+
+    func write(_ data: Data, forKey key: String) throws {
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        try excludeFromBackups(directory)
+
+        let url = fileURL(forKey: key)
+        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        try protect(url)
+        try excludeFromBackups(url)
+    }
+
+    func remove(_ key: String) {
+        try? FileManager.default.removeItem(at: fileURL(forKey: key))
+    }
+
+    func removeAll(keys: Set<String>) {
+        for key in keys {
+            remove(key)
+        }
+    }
+
+    private func fileURL(forKey key: String) -> URL {
+        directory.appendingPathComponent(
+            GuestDataStore.protectedStorageFileName(for: key),
+            isDirectory: false
+        )
+    }
+
+    private func protect(_ url: URL) throws {
+        try FileManager.default.setAttributes(
+            [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+            ofItemAtPath: url.path
+        )
+    }
+
+    private func excludeFromBackups(_ url: URL) throws {
+        var mutableURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try mutableURL.setResourceValues(values)
+    }
+}
+
+private struct LossyElement<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
+}
+
+private enum GuestDataDecodeIssue: Error {
+    case partialCollection
 }

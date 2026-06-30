@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 /// Settings screen.
@@ -11,12 +12,11 @@ import SwiftUI
 /// - `authManager.goal` — targets and goal context (never nil inside `MainTabView`)
 struct SettingsView: View {
     @Environment(AuthManager.self)         private var authManager
-    @Environment(FoodLogStore.self)        private var logStore
-    @Environment(FavoriteFoodStore.self)   private var favStore
+    @Environment(\.colorScheme)            private var colorScheme
+    // Bodyweight is read for the profile summary row. Other user-owned stores
+    // are no longer referenced here — store reset on sign-out/guest-exit is
+    // centralized in RootView's userState onChange hook.
     @Environment(BodyweightStore.self)     private var weightStore
-    @Environment(WaterStore.self)          private var waterStore
-    @Environment(DailyNoteStore.self)      private var noteStore
-    @Environment(GroceryListStore.self)    private var groceryStore
     @Environment(HealthKitService.self)    private var healthKit
     @Environment(NotificationService.self) private var notifications
 
@@ -27,6 +27,7 @@ struct SettingsView: View {
     @State private var showSignOutConfirm         = false
     @State private var showExitGuestConfirm       = false
     @State private var showDeleteAccountConfirm   = false
+    @State private var showAppleDeleteReauth      = false
     @State private var isDeletingAccount          = false
     @State private var deleteAccountError: String? = nil
     @State private var topBrandLogo = AkFitTopBrandLogoState()
@@ -69,6 +70,9 @@ struct SettingsView: View {
                         .environment(authManager)
                 }
             }
+            .sheet(isPresented: $showAppleDeleteReauth) {
+                appleDeleteReauthorizationSheet
+            }
             // Sign-out confirmation dialog (authenticated users).
             .confirmationDialog(
                 "Sign Out",
@@ -97,10 +101,21 @@ struct SettingsView: View {
                 isPresented: $showDeleteAccountConfirm,
                 titleVisibility: .visible
             ) {
-                Button("Delete My Account", role: .destructive) { deleteAccount() }
+                Button(
+                    authManager.requiresAppleReauthorizationForAccountDeletion
+                        ? "Continue"
+                        : "Delete My Account",
+                    role: .destructive
+                ) {
+                    if authManager.requiresAppleReauthorizationForAccountDeletion {
+                        showAppleDeleteReauth = true
+                    } else {
+                        deleteAccount()
+                    }
+                }
                 Button("Cancel", role: .cancel) { }
             } message: {
-                Text("This will permanently delete your account and all associated data — food logs, weight history, targets, and notes. This cannot be undone.")
+                Text(deleteAccountConfirmationMessage)
             }
         }
         .akfitTopBrandLogo(topBrandLogo)
@@ -354,6 +369,47 @@ struct SettingsView: View {
         }
     }
 
+    private var appleDeleteReauthorizationSheet: some View {
+        VStack(spacing: 20) {
+            Spacer()
+
+            VStack(spacing: 12) {
+                Text("Confirm with Apple")
+                    .font(.title2.weight(.semibold))
+                Text("Apple requires AkFit to revoke Sign in with Apple access before deleting this account. Confirm with Apple to continue. Your account will not be deleted if Apple confirmation fails or is canceled.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+
+            SignInWithAppleButton(.continue) { request in
+                request.requestedOperation = .operationRefresh
+            } onCompletion: { result in
+                handleAppleDeleteReauthorization(result)
+            }
+            .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
+            .frame(height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .padding(.horizontal, 24)
+            .disabled(isDeletingAccount)
+
+            Button("Cancel", role: .cancel) {
+                showAppleDeleteReauth = false
+            }
+            .disabled(isDeletingAccount)
+
+            if isDeletingAccount {
+                ProgressView()
+                    .padding(.top, 8)
+            }
+
+            Spacer()
+        }
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+    }
+
     // MARK: - Health section
 
     private var healthSection: some View {
@@ -483,6 +539,14 @@ struct SettingsView: View {
         return authManager.currentUserEmail?.first.map(String.init)?.uppercased() ?? "?"
     }
 
+    private var deleteAccountConfirmationMessage: String {
+        if authManager.requiresAppleReauthorizationForAccountDeletion {
+            return "This will permanently delete your account and all associated data. Because this account uses Sign in with Apple, Apple will ask you to confirm before deletion starts. This cannot be undone."
+        }
+
+        return "This will permanently delete your account and all associated data — food logs, weight history, targets, and notes. This cannot be undone."
+    }
+
     /// Formats a date to its 4-digit year string, e.g. "2024".
     private func memberYear(_ date: Date) -> String {
         String(Calendar.current.component(.year, from: date))
@@ -533,18 +597,50 @@ struct SettingsView: View {
         }
     }
 
-    private func deleteAccount() {
+    private func deleteAccount(appleAuthorizationCode: String? = nil) {
+        guard !isDeletingAccount else { return }
+
         isDeletingAccount = true
         deleteAccountError = nil
         Task {
             defer { isDeletingAccount = false }
             do {
-                try await authManager.deleteAccount()
-                clearUserOwnedState()
+                try await authManager.deleteAccount(appleAuthorizationCode: appleAuthorizationCode)
                 // AuthManager signs out locally → authStateChanges fires .signedOut
-                // → RootView re-routes to AuthView automatically.
+                // → RootView re-routes to AuthView AND resets all user-owned
+                // stores via its centralized userState onChange hook.
             } catch {
                 deleteAccountError = error.localizedDescription
+                showAppleDeleteReauth = false
+            }
+        }
+    }
+
+    private func handleAppleDeleteReauthorization(_ result: Result<ASAuthorization, Error>) {
+        guard !isDeletingAccount else { return }
+
+        switch result {
+        case .success(let authorization):
+            guard
+                let credential = authorization.credential as? ASAuthorizationAppleIDCredential,
+                let codeData = credential.authorizationCode,
+                let authorizationCode = String(data: codeData, encoding: .utf8),
+                !authorizationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else {
+                showAppleDeleteReauth = false
+                deleteAccountError = "Apple confirmation failed. Your account was not deleted. Please try again."
+                return
+            }
+            deleteAccount(appleAuthorizationCode: authorizationCode)
+
+        case .failure(let error):
+            showAppleDeleteReauth = false
+            let nsError = error as NSError
+            if nsError.domain == ASAuthorizationError.errorDomain,
+               nsError.code == ASAuthorizationError.canceled.rawValue {
+                deleteAccountError = "Apple confirmation was canceled. Your account was not deleted."
+            } else {
+                deleteAccountError = "Apple confirmation failed. Your account was not deleted. Please try again."
             }
         }
     }
@@ -552,25 +648,12 @@ struct SettingsView: View {
     /// Exits guest mode and destroys all local data.
     ///
     /// Called after the user confirms the destructive confirmation dialog.
-    /// Resets in-memory store state before clearing guest data so stale
-    /// entries don't linger in memory after routing back to `AuthView`.
+    /// In-memory store state is cleared by RootView's centralized
+    /// `userState` onChange hook when the transition to `.signedOut` lands —
+    /// per-call-site reset lists are intentionally gone (they had drifted).
     private func exitGuestMode() {
-        logStore.reset()
-        weightStore.reset()
-        waterStore.reset()
-        noteStore.reset()
-        groceryStore.reset()
         authManager.exitGuestMode()
         // AuthManager sets userState = .signedOut → RootView re-routes to AuthView.
-    }
-
-    private func clearUserOwnedState() {
-        logStore.reset()
-        favStore.reset()
-        weightStore.reset()
-        waterStore.reset()
-        noteStore.reset()
-        groceryStore.reset()
     }
 }
 

@@ -58,6 +58,8 @@ struct SearchView: View {
     @Environment(\.isSearching)             private var isSearchFieldActive
 
     @State private var newGroceryItem: String = ""
+    @State private var showGroceryActionError = false
+    @State private var groceryActionErrorMessage = "Please check your connection and try again."
     /// Guards against rapid double-tap on swipe-to-log (quick-log) actions.
     /// Set `true` before the insert call; cleared after it completes.
     @State private var isQuickLogging = false
@@ -137,6 +139,11 @@ struct SearchView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Please check your connection and try again.")
+            }
+            .alert("Couldn't update grocery list", isPresented: $showGroceryActionError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(groceryActionErrorMessage)
             }
             .searchable(
                 text: $query,
@@ -234,17 +241,28 @@ struct SearchView: View {
                 }
             }
             .task {
-                // Fetch suggestions, type-ahead terms, recents, favorites, and grocery items concurrently.
-                async let fetchedSuggestions = suggestionService.fetchSuggestions()
-                async let fetchedTerms = suggestionService.fetchTypeAheadTerms()
+                // `.task` re-runs on EVERY tab appearance (it is cancelled on
+                // disappear), so the static catalog fetches below are guarded:
+                // without the guards the full ~1,500-row type-ahead corpus was
+                // re-downloaded on every Search visit (observed 6x in one
+                // session in production API logs). The isEmpty guard also
+                // self-heals: a failed fetch leaves the array empty, so the
+                // next appearance retries.
+                if suggestions.isEmpty || typeAheadTerms.isEmpty {
+                    async let fetchedSuggestions = suggestionService.fetchSuggestions()
+                    async let fetchedTerms = suggestionService.fetchTypeAheadTerms()
+                    let (loadedSuggestions, loadedTerms) = await (fetchedSuggestions, fetchedTerms)
+                    if suggestions.isEmpty    { suggestions    = loadedSuggestions }
+                    if typeAheadTerms.isEmpty { typeAheadTerms = loadedTerms }
+                }
+                // Recents/favorites/grocery are small per-user queries and DO
+                // change between visits — keep refreshing them per appearance.
                 if let userId = authManager.currentUserId {
                     async let recents: Void = logStore.refreshRecents(userId: userId)
                     async let favs: Void    = favStore.refresh(userId: userId)
                     async let grocery: Void = groceryStore.fetchItems(userId: userId)
                     _ = await (recents, favs, grocery)
                 }
-                suggestions = await fetchedSuggestions
-                typeAheadTerms = await fetchedTerms
             }
             // Receives food items resolved by the center nav scan button (in MainTabView).
             // The cover has already dismissed before this fires, so we can push directly.
@@ -366,19 +384,29 @@ struct SearchView: View {
     private var groceryListSection: some View {
         Section {
             ForEach(groceryStore.items) { item in
+                let isBusy = groceryStore.isItemBusy(item) || groceryStore.isClearingChecked
                 GroceryItemRow(item: item)
                     .contentShape(Rectangle())
+                    .opacity(isBusy ? 0.55 : 1)
+                    .allowsHitTesting(!isBusy)
                     .onTapGesture {
                         guard let userId = authManager.currentUserId else { return }
-                        Task { await groceryStore.toggleItem(item, userId: userId) }
+                        Task {
+                            let result = await groceryStore.toggleItem(item, userId: userId)
+                            presentGroceryActionFailure(result)
+                        }
                     }
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             guard let userId = authManager.currentUserId else { return }
-                            Task { await groceryStore.deleteItem(item, userId: userId) }
+                            Task {
+                                let result = await groceryStore.deleteItem(item, userId: userId)
+                                presentGroceryActionFailure(result)
+                            }
                         } label: {
                             Label("Delete", systemImage: "trash")
                         }
+                        .disabled(isBusy)
                     }
             }
 
@@ -386,12 +414,19 @@ struct SearchView: View {
             HStack(spacing: 8) {
                 TextField("Add item…", text: $newGroceryItem)
                     .onSubmit { addGroceryItem() }
+                    .disabled(groceryStore.isAdding)
                 if !newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button(action: addGroceryItem) {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.body)
-                            .foregroundStyle(.primary)
+                        if groceryStore.isAdding {
+                            ProgressView()
+                                .controlSize(.small)
+                        } else {
+                            Image(systemName: "plus.circle.fill")
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                        }
                     }
+                    .disabled(groceryStore.isAdding)
                 }
             }
         } header: {
@@ -404,23 +439,39 @@ struct SearchView: View {
                 if groceryStore.items.contains(where: \.isChecked) {
                     Button("Clear checked") {
                         guard let userId = authManager.currentUserId else { return }
-                        Task { await groceryStore.clearChecked(userId: userId) }
+                        Task {
+                            let result = await groceryStore.clearChecked(userId: userId)
+                            presentGroceryActionFailure(result)
+                        }
                     }
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
                     .textCase(nil)
+                    .disabled(groceryStore.isClearingChecked)
                 }
             }
             .padding(.bottom, 2)
         }
     }
 
-    /// Adds the current `newGroceryItem` text as a new list entry, then clears the field.
+    /// Adds the current `newGroceryItem` text as a new list entry, then clears the field on success.
     private func addGroceryItem() {
         let name = newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, let userId = authManager.currentUserId else { return }
-        newGroceryItem = ""
-        Task { await groceryStore.addItem(name: name, userId: userId) }
+        Task {
+            let result = await groceryStore.addItem(name: name, userId: userId)
+            if result.didSucceed,
+               newGroceryItem.trimmingCharacters(in: .whitespacesAndNewlines) == name {
+                newGroceryItem = ""
+            }
+            presentGroceryActionFailure(result)
+        }
+    }
+
+    private func presentGroceryActionFailure(_ result: GroceryListActionResult) {
+        guard case let .failed(message) = result else { return }
+        groceryActionErrorMessage = message
+        showGroceryActionError = true
     }
 
     /// Shown while a debounce delay or network request is in progress and

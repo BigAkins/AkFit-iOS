@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	App-level privacy manifest (required-reason API declarations).
+
+	Apple enforces these via ITMS-91053 at upload validation. SDK manifests
+	(supabase-swift, sentry-cocoa) cover SDK code only — this file covers the
+	app binary's own API usage.
+
+	Declared usage, verified by repo sweep (2026-06-11):
+	  - UserDefaults (CA92.1 — app's own data only): GuestDataStore,
+	    NotificationService, AuthManager, FoodLogStore, BodyweightStore,
+	    DailyNoteStore, GroceryListStore.
+	No other required-reason APIs (file timestamps, system boot time, disk
+	space, active keyboards) are used by app code. If you add one, declare it
+	here in the same change — upload validation fails otherwise.
+
+	The App Privacy "nutrition label" lives in App Store Connect (see
+	docs/release-checklist.md); it is intentionally not duplicated here.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

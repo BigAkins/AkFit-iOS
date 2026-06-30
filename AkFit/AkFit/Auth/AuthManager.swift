@@ -10,7 +10,7 @@ import Supabase
 ///
 /// ## Guest mode
 /// When `userState == .guest`, profile, goal, and `currentUserId` are sourced
-/// from `GuestDataStore` (UserDefaults) — no Supabase calls are made for them.
+/// from `GuestDataStore` local persistence — no Supabase calls are made for them.
 /// All stores receive the same `GuestDataStore` reference and short-circuit to
 /// local reads/writes when `guestStore.isActive` is true.
 ///
@@ -36,6 +36,10 @@ final class AuthManager {
     /// `RootView` shows a retry screen instead of `OnboardingView` when this is set.
     private(set) var dataFetchFailed: Bool = false
 
+    /// Password-recovery routing state. When active, `RootView` shows the
+    /// focused set-new-password flow before normal auth/onboarding routing.
+    private(set) var passwordRecoveryState: PasswordRecoveryState = .inactive
+
     /// Display name captured from Apple's `ASAuthorizationAppleIDCredential`.
     /// Set before the Supabase sign-in call; consumed by `OnboardingView` to
     /// skip the name step (App Store requirement: don't re-ask for Apple-provided info).
@@ -58,6 +62,7 @@ final class AuthManager {
     // MARK: - Guest data store
 
     private let guestStore: GuestDataStore
+    private let shouldFetchServerUserData: Bool
 
     /// Cold-start safety timeout (see `init`). Cancelled as soon as the auth
     /// observer receives its first event so a slow `fetchUserData` can never
@@ -103,12 +108,27 @@ final class AuthManager {
         userState == .authenticated ? session?.user.email : nil
     }
 
+    /// `true` when the current Supabase session includes a Sign in with Apple identity.
+    var requiresAppleReauthorizationForAccountDeletion: Bool {
+        session?.user.hasAppleIdentity == true
+    }
+
+    /// `true` while a recovery link is being handled, the user is setting a
+    /// new password, or the recovery result needs to stay on screen.
+    var isPasswordRecoveryPresented: Bool {
+        passwordRecoveryState != .inactive
+    }
+
     // MARK: - Init
 
     /// Production initializer. Requires a shared `GuestDataStore` instance
     /// (injected from `AkFitApp.init` so stores share the same object).
     init(guestStore: GuestDataStore) {
         self.guestStore = guestStore
+        self.shouldFetchServerUserData = true
+        if Self.isPasswordRecoveryPending {
+            self.passwordRecoveryState = .processingLink
+        }
         // Restore guest mode that was active on last launch.
         if guestStore.isActive {
             self.userState = .guest
@@ -133,6 +153,7 @@ final class AuthManager {
     /// - Parameter previewMode: Pass `true` only in `#Preview` blocks or tests.
     init(previewMode: Bool, guestStore: GuestDataStore = GuestDataStore()) {
         self.guestStore = guestStore
+        self.shouldFetchServerUserData = !previewMode
         guard !previewMode else {
             isLoading = false
             return
@@ -148,7 +169,7 @@ final class AuthManager {
         }
     }
 
-    private func handle(event: AuthChangeEvent, session: Session?) async {
+    func handle(event: AuthChangeEvent, session: Session?) async {
         // An auth event is being processed — the cold-start timeout must not
         // clear `isLoading` mid-resolution (that would show an interactive
         // `AuthView`/guest entry point while a session fetch is in flight).
@@ -158,27 +179,17 @@ final class AuthManager {
 
         case .initialSession, .signedIn:
             if let session {
-                // A real Supabase session overrides guest mode if it was active.
-                if guestStore.isActive {
-                    guestStore.clearAll()
+                await applyAuthenticatedSession(session)
+                if Self.isPasswordRecoveryPending {
+                    self.passwordRecoveryState = .ready
                 }
-                let result = await fetchUserData(userId: session.user.id)
-                // Re-check after the await: the user may have tapped
-                // "Continue as Guest" while fetchUserData was in flight.
-                // Without this, the app lands in `.authenticated` while
-                // `guestStore.isActive` stays true — and every store would
-                // silently write to UserDefaults instead of Supabase.
-                if guestStore.isActive {
-                    guestStore.clearAll()
-                }
-                self._serverProfile  = result.profile
-                self._serverGoal     = result.goal
-                self.dataFetchFailed = result.fetchFailed
-                self.session         = session
-                self.userState       = .authenticated
             } else {
                 // No Supabase session — honour existing guest mode if active.
                 self.session = nil
+                if Self.isPasswordRecoveryPending {
+                    Self.clearPasswordRecoveryPersistence()
+                    self.passwordRecoveryState = .invalidLink
+                }
                 if userState != .guest {
                     self.userState = .signedOut
                 }
@@ -189,6 +200,8 @@ final class AuthManager {
             self.session = session
 
         case .signedOut, .userDeleted:
+            Self.clearPasswordRecoveryPersistence()
+            self.passwordRecoveryState = .inactive
             // Only change state if we were authenticated. Guest mode is not
             // affected by Supabase sign-out events (guests have no session).
             if userState == .authenticated {
@@ -200,8 +213,21 @@ final class AuthManager {
                 self.userState               = .signedOut
             }
 
+        case .passwordRecovery:
+            guard Self.isPasswordRecoveryPending else {
+                try? await SupabaseClientProvider.shared.auth.signOut(scope: .local)
+                clearAuthenticatedState()
+                self.passwordRecoveryState = .invalidLink
+                break
+            }
+            self.pendingAppleDisplayName = nil
+            if let session {
+                await applyAuthenticatedSession(session)
+            }
+            self.passwordRecoveryState = .ready
+
         default:
-            // passwordRecovery, mfaChallengeVerified, etc. — no routing change.
+            // mfaChallengeVerified, etc. — no routing change.
             break
         }
 
@@ -209,6 +235,29 @@ final class AuthManager {
     }
 
     // MARK: - User data fetching (authenticated path)
+
+    private func applyAuthenticatedSession(_ session: Session) async {
+        // A real Supabase session overrides guest mode if it was active.
+        if guestStore.isActive {
+            guestStore.clearAll()
+        }
+        let result = shouldFetchServerUserData
+            ? await fetchUserData(userId: session.user.id)
+            : UserDataResult(profile: nil, goal: nil, fetchFailed: false)
+        // Re-check after the await: the user may have tapped
+        // "Continue as Guest" while fetchUserData was in flight.
+        // Without this, the app lands in `.authenticated` while
+        // `guestStore.isActive` stays true — and every store would
+        // silently write to UserDefaults instead of Supabase.
+        if guestStore.isActive {
+            guestStore.clearAll()
+        }
+        self._serverProfile  = result.profile
+        self._serverGoal     = result.goal
+        self.dataFetchFailed = result.fetchFailed
+        self.session         = session
+        self.userState       = .authenticated
+    }
 
     private struct UserDataResult {
         var profile:     UserProfile?
@@ -300,7 +349,14 @@ final class AuthManager {
 
     func retryFetchUserData() async {
         guard let session else { return }
-        let result = await fetchUserData(userId: session.user.id)
+        let userId = session.user.id
+        let result = await fetchUserData(userId: userId)
+        guard !Task.isCancelled,
+              userState == .authenticated,
+              self.session?.user.id == userId
+        else {
+            return
+        }
         self._serverProfile  = result.profile
         self._serverGoal     = result.goal
         self.dataFetchFailed = result.fetchFailed
@@ -373,7 +429,91 @@ final class AuthManager {
     }
 
     func sendPasswordReset(email: String) async throws {
-        try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(email)
+        let state = PasswordRecoveryLink.makeState()
+        Self.setExpectedPasswordRecoveryState(state)
+        do {
+            try await SupabaseClientProvider.shared.auth.resetPasswordForEmail(
+                email,
+                redirectTo: PasswordRecoveryLink.redirectURL(state: state)
+            )
+        } catch {
+            Self.setExpectedPasswordRecoveryState(nil)
+            throw error
+        }
+    }
+
+    /// Handles password-recovery links opened through the app's `akfit` URL
+    /// scheme. Errors intentionally remain generic so callback tokens and raw
+    /// Supabase details are never displayed or logged by AkFit.
+    @discardableResult
+    func handleIncomingURL(_ url: URL) async -> Bool {
+        guard PasswordRecoveryLink.isRecoveryURL(url) else { return false }
+        guard Self.isExpectedPasswordRecoveryURL(url) else {
+            Self.setPasswordRecoveryPending(false)
+            passwordRecoveryState = .invalidLink
+            if isLoading { isLoading = false }
+            return true
+        }
+
+        passwordRecoveryState = .processingLink
+        Self.setPasswordRecoveryPending(true)
+        pendingAppleDisplayName = nil
+
+        do {
+            let recoveredSession = try await SupabaseClientProvider.shared.auth.session(from: url)
+            Self.setExpectedPasswordRecoveryState(nil)
+            await applyAuthenticatedSession(recoveredSession)
+            passwordRecoveryState = .ready
+        } catch {
+            Self.clearPasswordRecoveryPersistence()
+            passwordRecoveryState = .invalidLink
+        }
+
+        if isLoading { isLoading = false }
+        return true
+    }
+
+    func updatePasswordAfterRecovery(_ password: String) async throws {
+        guard passwordRecoveryState == .ready else {
+            throw PasswordRecoveryError.invalidOrExpiredLink
+        }
+
+        do {
+            try await SupabaseClientProvider.shared.auth.update(
+                user: UserAttributes(password: password)
+            )
+            Self.clearPasswordRecoveryPersistence()
+            passwordRecoveryState = .passwordUpdated
+        } catch {
+            if Self.isInvalidOrExpiredRecoveryError(error) {
+                Self.clearPasswordRecoveryPersistence()
+                try? await SupabaseClientProvider.shared.auth.signOut(scope: .local)
+                clearAuthenticatedState()
+                passwordRecoveryState = .invalidLink
+                throw PasswordRecoveryError.invalidOrExpiredLink
+            }
+            throw PasswordRecoveryError.updateFailed
+        }
+    }
+
+    func dismissPasswordRecovery() {
+        guard passwordRecoveryState == .invalidLink || passwordRecoveryState == .passwordUpdated else {
+            return
+        }
+        Self.clearPasswordRecoveryPersistence()
+        passwordRecoveryState = .inactive
+    }
+
+    func cancelPasswordRecovery() async {
+        passwordRecoveryState = .processingLink
+        do {
+            try await SupabaseClientProvider.shared.auth.signOut(scope: .local)
+        } catch {
+            clearAuthenticatedState()
+        }
+        Self.clearPasswordRecoveryPersistence()
+        clearAuthenticatedState()
+        passwordRecoveryState = .inactive
     }
 
     /// Resolves a valid authenticated session before any write to RLS-protected
@@ -397,7 +537,9 @@ final class AuthManager {
                 return validSession.user.id
             } catch {
                 lastError = error
-                debugAuthWrite("failed to resolve write-ready session on attempt \(attempt): \(error)")
+                debugAuthWrite(
+                    "failed to resolve write-ready session on attempt \(attempt): \(Self.sanitizedAuthDebugDescription(error))"
+                )
                 if attempt == 1 {
                     try? await Task.sleep(for: .milliseconds(350))
                 }
@@ -427,29 +569,33 @@ final class AuthManager {
     /// `authStateChanges` stream fires `.signedOut`, `userState` becomes
     /// `.signedOut`, and `RootView` routes to `AuthView` automatically.
     ///
-    /// **Sign in with Apple:** the Apple token becomes orphaned after deletion
-    /// (any credential check returns `.notFound`). Full cryptographic revocation
-    /// via Apple's `/auth/revoke` endpoint requires the Apple private key on the
-    /// server — that infrastructure is not yet in place. The account and all
-    /// data are permanently removed here.
-    func deleteAccount() async throws {
+    /// **Sign in with Apple:** Apple-backed accounts must pass a fresh Apple
+    /// authorization code. The Edge Function exchanges/revokes that grant before
+    /// deleting the Supabase user. The code is never logged or persisted.
+    func deleteAccount(appleAuthorizationCode: String? = nil) async throws {
         guard session != nil else {
             throw DeleteAccountError.notAuthenticated
         }
 
         let validSession = try await resolveDeleteAccountSession()
+        let trimmedAppleCode = appleAuthorizationCode?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let shouldRevokeApple = validSession.user.hasAppleIdentity
+        if shouldRevokeApple, trimmedAppleCode?.isEmpty != false {
+            throw DeleteAccountError.appleAuthorizationRequired
+        }
+        let requestBody = DeleteAccountRequest(appleAuthorizationCode: trimmedAppleCode)
 
         do {
-            debugDeleteAccount(
-                "invoking delete-account with session JWT \(maskedToken(validSession.accessToken))"
-            )
+            debugDeleteAccount("invoking delete-account, appleRevocationRequired=\(shouldRevokeApple)")
             try await SupabaseClientProvider.shared.functions
                 .invoke(
                     "delete-account",
                     options: FunctionInvokeOptions(
                         headers: [
                             "Authorization": "Bearer \(validSession.accessToken)"
-                        ]
+                        ],
+                        body: requestBody
                     )
                 )
         } catch {
@@ -470,7 +616,9 @@ final class AuthManager {
         do {
             try await SupabaseClientProvider.shared.auth.signOut()
         } catch {
-            debugDeleteAccount("local signOut failed after deletion: \(error)")
+            debugDeleteAccount(
+                "local signOut failed after deletion: \(Self.sanitizedAuthDebugDescription(error))"
+            )
             // Local signOut failed (invalid JWT, network issue) and the auth
             // observer may not fire. Force-clear session state so the user
             // isn't stuck in an authenticated state with a deleted account.
@@ -560,13 +708,12 @@ final class AuthManager {
             switch functionError {
             case .relayError:
                 return "relay error"
-            case let .httpError(code, data):
-                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
-                return "http \(code), body: \(body)"
+            case let .httpError(code, _):
+                return "http \(code)"
             }
         }
 
-        return String(describing: error)
+        return "unexpected error"
     }
 
     private func resolveDeleteAccountSession() async throws -> Session {
@@ -584,7 +731,7 @@ final class AuthManager {
             validSession = try await auth.session
             session = validSession
             debugDeleteAccount(
-                "using session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                "using session for current user, expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
             )
         } catch {
             debugDeleteAccount("failed to resolve valid session before deletion: \(describeDeleteAccountAuthError(error))")
@@ -606,7 +753,7 @@ final class AuthManager {
                 validSession = try await auth.refreshSession(refreshToken: validSession.refreshToken)
                 session = validSession
                 debugDeleteAccount(
-                    "refreshed session for user \(validSession.user.id.uuidString), expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
+                    "refreshed session for current user, expired=\(validSession.isExpired), tokenPresent=\(!validSession.accessToken.isEmpty)"
                 )
                 _ = try await auth.user(jwt: validSession.accessToken)
                 debugDeleteAccount("validated refreshed session JWT against current Supabase project")
@@ -623,19 +770,22 @@ final class AuthManager {
     }
 
     private func describeDeleteAccountAuthError(_ error: Error) -> String {
+        Self.sanitizedAuthDebugDescription(error)
+    }
+
+    static func sanitizedAuthDebugDescription(_ error: Error) -> String {
         if let authError = error as? AuthError {
             switch authError {
-            case let .api(message, errorCode, underlyingData, underlyingResponse):
-                let body = String(data: underlyingData, encoding: .utf8) ?? "<non-utf8 body>"
-                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue), message: \(message), body: \(body)"
-            case let .jwtVerificationFailed(message):
-                return "jwt verification failed: \(message)"
+            case let .api(_, errorCode, _, underlyingResponse):
+                return "auth api \(underlyingResponse.statusCode), code: \(errorCode.rawValue)"
+            case .jwtVerificationFailed:
+                return "jwt verification failed"
             default:
-                return authError.localizedDescription
+                return "auth error"
             }
         }
 
-        return String(describing: error)
+        return "unexpected error"
     }
 
     private func isInvalidJWTError(_ error: Error) -> Bool {
@@ -654,15 +804,78 @@ final class AuthManager {
         return description.contains("invalid jwt") || description.contains("bad jwt")
     }
 
+    private static func isInvalidOrExpiredRecoveryError(_ error: Error) -> Bool {
+        if let authError = error as? AuthError {
+            switch authError {
+            case .sessionMissing, .jwtVerificationFailed:
+                return true
+            case let .api(_, errorCode, _, _):
+                return [
+                    .badCodeVerifier,
+                    .badJWT,
+                    .flowStateExpired,
+                    .flowStateNotFound,
+                    .invalidJWT,
+                    .otpExpired,
+                    .sessionExpired,
+                    .sessionNotFound,
+                ].contains(errorCode)
+            case .implicitGrantRedirect, .pkceGrantCodeExchange:
+                return true
+            default:
+                return false
+            }
+        }
+
+        return false
+    }
+
+    private static let passwordRecoveryPendingKey = "akfit.auth.passwordRecoveryPending"
+    private static let passwordRecoveryExpectedStateKey = "akfit.auth.passwordRecoveryExpectedState"
+
+    private static var isPasswordRecoveryPending: Bool {
+        UserDefaults.standard.bool(forKey: passwordRecoveryPendingKey)
+    }
+
+    private static func setPasswordRecoveryPending(_ isPending: Bool) {
+        if isPending {
+            UserDefaults.standard.set(true, forKey: passwordRecoveryPendingKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: passwordRecoveryPendingKey)
+        }
+    }
+
+    private static var expectedPasswordRecoveryState: String? {
+        guard let state = UserDefaults.standard.string(forKey: passwordRecoveryExpectedStateKey),
+              !state.isEmpty
+        else {
+            return nil
+        }
+        return state
+    }
+
+    private static func setExpectedPasswordRecoveryState(_ state: String?) {
+        if let state, !state.isEmpty {
+            UserDefaults.standard.set(state, forKey: passwordRecoveryExpectedStateKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: passwordRecoveryExpectedStateKey)
+        }
+    }
+
+    private static func clearPasswordRecoveryPersistence() {
+        setPasswordRecoveryPending(false)
+        setExpectedPasswordRecoveryState(nil)
+    }
+
+    private static func isExpectedPasswordRecoveryURL(_ url: URL) -> Bool {
+        guard let expected = expectedPasswordRecoveryState else { return false }
+        return PasswordRecoveryLink.state(in: url) == expected
+    }
+
     private func debugDeleteAccount(_ message: String) {
         #if DEBUG
         print("[DeleteAccount] \(message)")
         #endif
-    }
-
-    private func maskedToken(_ token: String) -> String {
-        let suffix = String(token.suffix(8))
-        return "<len:\(token.count) suffix:\(suffix)>"
     }
 
     private func debugAuthWrite(_ message: String) {
@@ -670,6 +883,10 @@ final class AuthManager {
         print("[AuthWrite] \(message)")
         #endif
     }
+}
+
+private struct DeleteAccountRequest: Encodable {
+    let appleAuthorizationCode: String?
 }
 
 // MARK: - Account deletion error
@@ -680,6 +897,8 @@ final class AuthManager {
 enum DeleteAccountError: LocalizedError {
     /// No active Supabase session — the user must sign in again.
     case notAuthenticated
+    /// Sign in with Apple requires a fresh grant before account deletion.
+    case appleAuthorizationRequired
     /// The Edge Function returned an error or the network request failed.
     case serverError
 
@@ -687,8 +906,102 @@ enum DeleteAccountError: LocalizedError {
         switch self {
         case .notAuthenticated:
             return "No active session. Please sign in again before deleting your account."
+        case .appleAuthorizationRequired:
+            return "Please confirm with Sign in with Apple before deleting this account."
         case .serverError:
             return "Account deletion failed. Please check your connection and try again."
+        }
+    }
+}
+
+extension User {
+    var hasAppleIdentity: Bool {
+        if identities?.contains(where: { $0.provider.caseInsensitiveCompare("apple") == .orderedSame }) == true {
+            return true
+        }
+
+        if let provider = appMetadata["provider"]?.stringValue,
+           provider.caseInsensitiveCompare("apple") == .orderedSame {
+            return true
+        }
+
+        let providers = appMetadata["providers"]?.arrayValue?
+            .compactMap(\.stringValue) ?? []
+        return providers.contains { $0.caseInsensitiveCompare("apple") == .orderedSame }
+    }
+}
+
+// MARK: - Password recovery routing
+
+enum PasswordRecoveryState: Equatable {
+    case inactive
+    case processingLink
+    case ready
+    case invalidLink
+    case passwordUpdated
+}
+
+enum PasswordRecoveryLink {
+    static func makeState() -> String {
+        UUID().uuidString.lowercased()
+    }
+
+    static func redirectURL(state: String) -> URL {
+        var components = URLComponents()
+        components.scheme = "akfit"
+        components.host = "auth-callback"
+        components.queryItems = [
+            URLQueryItem(name: "flow", value: "password-recovery"),
+            URLQueryItem(name: "state", value: state),
+        ]
+        return components.url!
+    }
+
+    static func isRecoveryURL(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == "akfit" else { return false }
+        guard url.host?.lowercased() == "auth-callback" else { return false }
+
+        let params = parameters(in: url)
+        if params["flow"] == "password-recovery" { return true }
+        if params["type"] == "recovery" { return true }
+
+        return false
+    }
+
+    static func state(in url: URL) -> String? {
+        parameters(in: url)["state"]
+    }
+
+    private static func parameters(in url: URL) -> [String: String] {
+        var values: [String: String] = [:]
+
+        if let components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            for item in components.queryItems ?? [] {
+                values[item.name] = item.value
+            }
+        }
+
+        if let fragment = url.fragment,
+           let fragmentComponents = URLComponents(string: "?\(fragment)") {
+            for item in fragmentComponents.queryItems ?? [] {
+                values[item.name] = item.value
+            }
+        }
+
+        return values
+    }
+}
+
+enum PasswordRecoveryError: LocalizedError, Equatable {
+    case invalidOrExpiredLink
+    case updateFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidOrExpiredLink:
+            return "This recovery link is invalid or expired. Request a new link and open it on this device."
+        case .updateFailed:
+            return "Couldn't update your password. Check your connection and try again."
         }
     }
 }
