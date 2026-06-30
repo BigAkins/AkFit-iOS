@@ -39,6 +39,23 @@ struct AuthManagerDeleteAccountTests {
         await manager.handle(event: .signedOut, session: nil)
     }
 
+    @Test func sanitizedAuthDebugDescriptionDoesNotIncludeUnexpectedErrorText() {
+        let error = NSError(
+            domain: "Auth",
+            code: 1,
+            userInfo: [
+                NSLocalizedDescriptionKey: "Bearer raw-token refresh-token user@example.com",
+            ]
+        )
+
+        let description = AuthManager.sanitizedAuthDebugDescription(error)
+
+        #expect(description == "unexpected error")
+        #expect(!description.contains("raw-token"))
+        #expect(!description.contains("refresh-token"))
+        #expect(!description.contains("user@example.com"))
+    }
+
     private static func makeSession(
         provider: String,
         appProvider: String? = nil

@@ -537,7 +537,9 @@ final class AuthManager {
                 return validSession.user.id
             } catch {
                 lastError = error
-                debugAuthWrite("failed to resolve write-ready session on attempt \(attempt): \(error)")
+                debugAuthWrite(
+                    "failed to resolve write-ready session on attempt \(attempt): \(Self.sanitizedAuthDebugDescription(error))"
+                )
                 if attempt == 1 {
                     try? await Task.sleep(for: .milliseconds(350))
                 }
@@ -614,7 +616,9 @@ final class AuthManager {
         do {
             try await SupabaseClientProvider.shared.auth.signOut()
         } catch {
-            debugDeleteAccount("local signOut failed after deletion: \(error)")
+            debugDeleteAccount(
+                "local signOut failed after deletion: \(Self.sanitizedAuthDebugDescription(error))"
+            )
             // Local signOut failed (invalid JWT, network issue) and the auth
             // observer may not fire. Force-clear session state so the user
             // isn't stuck in an authenticated state with a deleted account.
@@ -766,6 +770,10 @@ final class AuthManager {
     }
 
     private func describeDeleteAccountAuthError(_ error: Error) -> String {
+        Self.sanitizedAuthDebugDescription(error)
+    }
+
+    static func sanitizedAuthDebugDescription(_ error: Error) -> String {
         if let authError = error as? AuthError {
             switch authError {
             case let .api(_, errorCode, _, underlyingResponse):
