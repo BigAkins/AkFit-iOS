@@ -12,7 +12,8 @@
 //   1. Supabase Edge Runtime verifies the caller JWT before invocation.
 //   2. The function also resolves the Authorization header JWT to a user.
 //   3. Apple-backed users must provide a fresh Apple authorization code.
-//   4. The function exchanges/revokes that Apple grant before deletion.
+//   4. The function exchanges that Apple grant and verifies the linked Apple
+//      identity before revocation/deletion.
 //   5. The service-role key exists only in this server-side function and is
 //      never exposed to the iOS client.
 // =============================================================================
@@ -29,7 +30,12 @@ const responseHeaders = {
 export type SupabaseUser = {
   id: string
   app_metadata?: Record<string, unknown>
-  identities?: Array<{ provider?: string }>
+  identities?: Array<{
+    id?: string
+    provider?: string
+    identity_data?: Record<string, unknown>
+    identityData?: Record<string, unknown>
+  }>
 }
 
 type SupabaseAuthClient = {
@@ -150,7 +156,16 @@ export function createDeleteAccountHandler(
         )
       }
 
-      const revoked = await revokeAppleGrant(appleAuthorizationCode, deps)
+      const linkedAppleSubject = appleIdentitySubject(user)
+      if (!linkedAppleSubject) {
+        console.error('delete-account: apple revocation failed reason=missing_linked_identity')
+        return jsonResponse(
+          { error: 'Apple confirmation failed. Please try again.' },
+          502
+        )
+      }
+
+      const revoked = await revokeAppleGrant(appleAuthorizationCode, linkedAppleSubject, deps)
       if (!revoked) {
         return jsonResponse(
           { error: 'Apple confirmation failed. Please try again.' },
@@ -209,69 +224,224 @@ export function hasAppleProvider(user: SupabaseUser): boolean {
   return Array.isArray(providers) && providers.some(equalsApple)
 }
 
+function appleIdentitySubject(user: SupabaseUser): string | null {
+  for (const identity of user.identities ?? []) {
+    if (!equalsApple(identity.provider)) {
+      continue
+    }
+
+    const identityData = identity.identity_data ?? identity.identityData
+    const subject = nonEmptyString(identityData?.sub)
+    if (subject) {
+      return subject
+    }
+
+    const directId = nonEmptyString(identity.id)
+    if (directId) {
+      return directId
+    }
+  }
+
+  return null
+}
+
 function equalsApple(value: unknown): boolean {
   return typeof value === 'string' && value.toLowerCase() === 'apple'
 }
 
+function nonEmptyString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 async function revokeAppleGrant(
   authorizationCode: string,
+  expectedAppleSubject: string,
   deps: DeleteAccountDependencies
 ): Promise<boolean> {
   const config = appleClientSecretConfig(deps)
   if (!config) {
-    console.error('delete-account: missing apple revocation env config')
+    console.error('delete-account: apple revocation failed reason=missing_config')
     return false
   }
 
-  const clientSecret = await deps.createAppleClientSecret(config)
-  const tokenBody = new URLSearchParams({
-    client_id: config.clientId,
-    client_secret: clientSecret,
-    code: authorizationCode,
-    grant_type: 'authorization_code',
-  })
+  try {
+    let clientSecret: string
+    try {
+      clientSecret = await deps.createAppleClientSecret(config)
+    } catch {
+      console.error('delete-account: apple revocation failed reason=client_secret')
+      return false
+    }
 
-  const tokenResponse = await deps.fetch('https://appleid.apple.com/auth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: tokenBody,
-  })
+    const tokenBody = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: clientSecret,
+      code: authorizationCode,
+      grant_type: 'authorization_code',
+    })
 
-  if (!tokenResponse.ok) {
-    console.error(`delete-account: apple token exchange failed status=${tokenResponse.status}`)
+    let tokenResponse: Response
+    try {
+      tokenResponse = await deps.fetch('https://appleid.apple.com/auth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: tokenBody,
+      })
+    } catch {
+      console.error('delete-account: apple revocation failed reason=token_fetch')
+      return false
+    }
+
+    if (!tokenResponse.ok) {
+      console.error(`delete-account: apple token exchange failed status=${tokenResponse.status}`)
+      return false
+    }
+
+    let tokenPayload: Record<string, unknown>
+    try {
+      const tokenJSON = await tokenResponse.json()
+      if (!isObject(tokenJSON)) {
+        console.error('delete-account: apple revocation failed reason=token_json')
+        return false
+      }
+      tokenPayload = tokenJSON
+    } catch {
+      console.error('delete-account: apple revocation failed reason=token_json')
+      return false
+    }
+
+    const appleSubject = appleSubjectFromToken(tokenPayload.id_token, config.clientId)
+    if (!appleSubject) {
+      return false
+    }
+
+    if (appleSubject !== expectedAppleSubject) {
+      console.error('delete-account: apple revocation failed reason=identity_mismatch')
+      return false
+    }
+
+    const refreshToken = nonEmptyString(tokenPayload.refresh_token)
+    const accessToken = nonEmptyString(tokenPayload.access_token)
+    const tokenToRevoke = refreshToken ?? accessToken
+    const tokenTypeHint = refreshToken ? 'refresh_token' : 'access_token'
+    if (!tokenToRevoke) {
+      console.error('delete-account: apple token exchange returned no revocable token')
+      return false
+    }
+
+    const revokeBody = new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: clientSecret,
+      token: tokenToRevoke,
+      token_type_hint: tokenTypeHint,
+    })
+
+    let revokeResponse: Response
+    try {
+      revokeResponse = await deps.fetch('https://appleid.apple.com/auth/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: revokeBody,
+      })
+    } catch {
+      console.error('delete-account: apple revocation failed reason=revoke_fetch')
+      return false
+    }
+
+    if (!revokeResponse.ok) {
+      console.error(`delete-account: apple token revoke failed status=${revokeResponse.status}`)
+      return false
+    }
+
+    return true
+  } catch {
+    console.error('delete-account: apple revocation failed reason=unexpected')
     return false
   }
+}
 
-  const tokenPayload = await tokenResponse.json() as {
-    access_token?: string
-    refresh_token?: string
-  }
-  const tokenToRevoke = tokenPayload.refresh_token ?? tokenPayload.access_token
-  const tokenTypeHint = tokenPayload.refresh_token ? 'refresh_token' : 'access_token'
-  if (!tokenToRevoke) {
-    console.error('delete-account: apple token exchange returned no revocable token')
-    return false
+function appleSubjectFromToken(idToken: unknown, expectedAudience: string): string | null {
+  if (typeof idToken !== 'string') {
+    console.error('delete-account: apple revocation failed reason=missing_id_token')
+    return null
   }
 
-  const revokeBody = new URLSearchParams({
-    client_id: config.clientId,
-    client_secret: clientSecret,
-    token: tokenToRevoke,
-    token_type_hint: tokenTypeHint,
-  })
-
-  const revokeResponse = await deps.fetch('https://appleid.apple.com/auth/revoke', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: revokeBody,
-  })
-
-  if (!revokeResponse.ok) {
-    console.error(`delete-account: apple token revoke failed status=${revokeResponse.status}`)
-    return false
+  const payload = jwtPayload(idToken)
+  if (!payload) {
+    console.error('delete-account: apple revocation failed reason=invalid_id_token')
+    return null
   }
 
-  return true
+  if (payload.iss !== 'https://appleid.apple.com') {
+    console.error('delete-account: apple revocation failed reason=issuer_mismatch')
+    return null
+  }
+
+  if (!audienceMatches(payload.aud, expectedAudience)) {
+    console.error('delete-account: apple revocation failed reason=audience_mismatch')
+    return null
+  }
+
+  const subject = nonEmptyString(payload.sub)
+  if (!subject) {
+    console.error('delete-account: apple revocation failed reason=missing_subject')
+    return null
+  }
+
+  return subject
+}
+
+function jwtPayload(token: string): Record<string, unknown> | null {
+  const parts = token.split('.')
+  if (parts.length !== 3) {
+    return null
+  }
+
+  const payloadText = base64URLDecodeToString(parts[1])
+  if (!payloadText) {
+    return null
+  }
+
+  try {
+    const payload = JSON.parse(payloadText)
+    return isObject(payload) ? payload : null
+  } catch {
+    return null
+  }
+}
+
+function audienceMatches(audience: unknown, expectedAudience: string): boolean {
+  if (typeof audience === 'string') {
+    return audience === expectedAudience
+  }
+
+  return Array.isArray(audience) && audience.some((value) => value === expectedAudience)
+}
+
+function base64URLDecodeToString(value: string): string | null {
+  if (value.length % 4 === 1) {
+    return null
+  }
+
+  const base64 = value.replaceAll('-', '+').replaceAll('_', '/')
+  const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
+
+  try {
+    const binary = atob(padded)
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0))
+    return new TextDecoder().decode(bytes)
+  } catch {
+    return null
+  }
 }
 
 function appleClientSecretConfig(
