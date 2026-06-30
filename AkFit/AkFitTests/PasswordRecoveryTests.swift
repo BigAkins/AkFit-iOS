@@ -89,6 +89,7 @@ struct PasswordRecoveryLinkTests {
     }
 }
 
+@Suite(.serialized)
 @MainActor
 struct AuthManagerPasswordRecoveryTests {
 
