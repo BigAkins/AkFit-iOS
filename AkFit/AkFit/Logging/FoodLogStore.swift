@@ -46,6 +46,12 @@ final class FoodLogStore {
 
     private var isGuest: Bool { guestStore?.isActive == true }
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `GuestDataStore` and
@@ -100,6 +106,7 @@ final class FoodLogStore {
     // MARK: - Fetch today
 
     func refreshToday(userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         isRefreshing = true
         refreshFailed = false
         defer { isRefreshing = false }
@@ -125,8 +132,10 @@ final class FoodLogStore {
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             todayLogs = logs
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return }
             refreshFailed = true
         }
     }
@@ -143,9 +152,11 @@ final class FoodLogStore {
     func refreshDay(userId: UUID, date: Date) async {
         let cal = Calendar.current
         let day = cal.startOfDay(for: date)
+        guard canApplyUserOwnedState(for: userId) else { return }
 
         if cal.isDateInToday(day) {
             await refreshToday(userId: userId)
+            guard canApplyUserOwnedState(for: userId) else { return }
             dayLogs     = todayLogs
             dayLogsDate = day
             return
@@ -181,9 +192,11 @@ final class FoodLogStore {
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             dayLogs     = logs
             dayLogsDate = day
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return }
             refreshFailed = true
         }
     }
@@ -191,6 +204,7 @@ final class FoodLogStore {
     // MARK: - Fetch recents
 
     func refreshRecents(userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         // Guest path: sort all guest logs newest-first, deduplicate by name.
         if let gs = guestStore, gs.isActive {
             let sorted = gs.allFoodLogs.sorted { $0.loggedAt > $1.loggedAt }
@@ -213,6 +227,7 @@ final class FoodLogStore {
                 .execute()
                 .value
 
+            guard canApplyUserOwnedState(for: userId) else { return }
             var seen = Set<String>()
             recentFoods = logs
                 .filter { seen.insert($0.foodName).inserted }
@@ -229,6 +244,7 @@ final class FoodLogStore {
     /// preceding `days - 1` days). Pass a different value to support 7, 30, or
     /// 90-day history ranges in `ProgressTabView`.
     func refreshWeek(userId: UUID, days: Int = 7) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         // Guest path: filter from guest store by range start date.
         if let gs = guestStore, gs.isActive {
             let rangeStart = rangeStartDate(days: days)
@@ -261,9 +277,11 @@ final class FoodLogStore {
                     .range(from: page * pageSize, to: (page + 1) * pageSize - 1)
                     .execute()
                     .value
+                guard canApplyUserOwnedState(for: userId) else { return }
                 all.append(contentsOf: logs)
                 if logs.count < pageSize { break }
             }
+            guard canApplyUserOwnedState(for: userId) else { return }
             weekLogs = all
         } catch {
             // Non-fatal: ProgressTabView shows whatever data is available.
@@ -292,6 +310,9 @@ final class FoodLogStore {
         // Guard: never accept a future `loggedAt` from a caller. Falls back
         // to "now" if a caller misuses the API.
         let safeLoggedAt = loggedAt > now ? now : loggedAt
+        guard canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
 
         // Guest path: create locally and persist to GuestDataStore.
         if let gs = guestStore, gs.isActive {
@@ -317,6 +338,9 @@ final class FoodLogStore {
         // Authenticated path: validate the session (refreshing once if needed)
         // before issuing the write, then persist to Supabase.
         let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+        guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         let payload = FoodLogInsert(
             userId:       validUserId,
             foodName:     food.name,
@@ -338,6 +362,7 @@ final class FoodLogStore {
             .execute()
             .value
 
+        guard canApplyUserOwnedState(for: validUserId) else { return }
         updateInMemory(with: saved)
     }
 
@@ -379,12 +404,17 @@ final class FoodLogStore {
 
         // Authenticated path: validate the session before issuing the delete.
         // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
-        _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+        let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
         try await SupabaseClientProvider.shared
             .from("food_logs")
             .delete()
             .eq("id", value: logId.uuidString)
             .execute()
+        if let validUserId {
+            guard canApplyUserOwnedState(for: validUserId) else { return }
+        } else {
+            guard !Task.isCancelled else { return }
+        }
         removeFromMemory(logId: logId)
     }
 

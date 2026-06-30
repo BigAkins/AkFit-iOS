@@ -1,4 +1,5 @@
 import Foundation
+import Supabase
 import Testing
 @testable import AkFit
 
@@ -98,6 +99,57 @@ struct GroceryListStoreTests {
         #expect(itemsAfterStaleFetch.isEmpty)
     }
 
+    @Test func currentUserFetchAppliesWithAuthIdentityGuard() async {
+        let userId = UUID()
+        let item = makeGroceryItem(userId: userId)
+        let manager = AuthManager(previewMode: true)
+        let remote = GroceryListRemoteSpy()
+        remote.fetchedItemsByUserID[userId] = [item]
+        let store = GroceryListStore(authManager: manager, remote: remote.client)
+
+        await manager.handle(event: .signedIn, session: makeSession(userId: userId))
+        await store.fetchItems(userId: userId)
+
+        #expect(store.items.map(\.id) == [item.id])
+
+        await manager.handle(event: .signedOut, session: nil)
+    }
+
+    @Test func staleFetchForOldUserDoesNotOverwriteCurrentUserAfterAccountSwitch() async {
+        let oldUserId = UUID()
+        let newUserId = UUID()
+        let oldItem = makeGroceryItem(userId: oldUserId, name: "Old Milk")
+        let newItem = makeGroceryItem(userId: newUserId, name: "New Eggs")
+        let manager = AuthManager(previewMode: true)
+        let remote = GroceryListRemoteSpy()
+        remote.suspendedFetchUserID = oldUserId
+        remote.fetchedItemsByUserID[newUserId] = [newItem]
+        let store = GroceryListStore(authManager: manager, remote: remote.client)
+
+        await manager.handle(event: .signedIn, session: makeSession(userId: oldUserId))
+        let staleFetchTask = Task {
+            await store.fetchItems(userId: oldUserId)
+        }
+        await remote.waitForSuspendedFetch()
+        #expect(remote.isFetchSuspended)
+        guard remote.isFetchSuspended else {
+            staleFetchTask.cancel()
+            return
+        }
+
+        await manager.handle(event: .signedIn, session: makeSession(userId: newUserId))
+        store.reset()
+        await store.fetchItems(userId: newUserId)
+        #expect(store.items.map(\.id) == [newItem.id])
+
+        remote.completeFetch(with: [oldItem])
+        await staleFetchTask.value
+
+        #expect(store.items.map(\.id) == [newItem.id])
+
+        await manager.handle(event: .signedOut, session: nil)
+    }
+
     @Test func clearCheckedFailureKeepsItemsVisibleAndReportsError() async {
         let userId = UUID()
         let checked = makeGroceryItem(userId: userId, name: "Eggs", isChecked: true)
@@ -136,6 +188,7 @@ private func didSucceed(_ result: GroceryListActionResult) -> Bool {
 
 private final class GroceryListRemoteSpy {
     var fetchedItems: [GroceryItem] = []
+    var fetchedItemsByUserID: [UUID: [GroceryItem]] = [:]
     var addedItems: [GroceryItem] = []
     var updatedItems: [(id: UUID, isChecked: Bool)] = []
     var deletedItemIDs: [UUID] = []
@@ -147,11 +200,34 @@ private final class GroceryListRemoteSpy {
     var deleteError: Error?
     var deleteCheckedError: Error?
 
+    var suspendedFetchUserID: UUID?
+    private var suspendedFetchContinuation: CheckedContinuation<[GroceryItem], Error>?
+
+    var isFetchSuspended: Bool {
+        suspendedFetchContinuation != nil
+    }
+
+    func waitForSuspendedFetch() async {
+        for _ in 0..<100 where suspendedFetchContinuation == nil {
+            await Task.yield()
+        }
+    }
+
+    func completeFetch(with items: [GroceryItem]) {
+        suspendedFetchContinuation?.resume(returning: items)
+        suspendedFetchContinuation = nil
+    }
+
     var client: GroceryListRemoteClient {
         GroceryListRemoteClient(
-            fetchItems: { [self] _ in
+            fetchItems: { [self] userId in
                 if let fetchError { throw fetchError }
-                return fetchedItems
+                if suspendedFetchUserID == userId {
+                    return try await withCheckedThrowingContinuation { continuation in
+                        suspendedFetchContinuation = continuation
+                    }
+                }
+                return fetchedItemsByUserID[userId] ?? fetchedItems
             },
             addItem: { [self] item in
                 addedItems.append(item)
@@ -188,5 +264,27 @@ private func makeGroceryItem(
         isChecked: isChecked,
         sortOrder: sortOrder,
         createdAt: Date(timeIntervalSince1970: 1_720_000_000)
+    )
+}
+
+private func makeSession(userId: UUID) -> Session {
+    let now = Date()
+    let user = User(
+        id: userId,
+        appMetadata: [:],
+        userMetadata: [:],
+        aud: "authenticated",
+        email: "user@example.com",
+        createdAt: now,
+        updatedAt: now
+    )
+
+    return Session(
+        accessToken: "access-token",
+        tokenType: "bearer",
+        expiresIn: 3_600,
+        expiresAt: now.addingTimeInterval(3_600).timeIntervalSince1970,
+        refreshToken: "refresh-token",
+        user: user
     )
 }

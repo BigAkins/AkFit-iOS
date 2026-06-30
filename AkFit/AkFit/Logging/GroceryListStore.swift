@@ -48,6 +48,12 @@ final class GroceryListStore {
     private let remote: GroceryListRemoteClient
     private var isGuest: Bool { guestStore?.isActive == true }
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `GuestDataStore` and
@@ -70,6 +76,7 @@ final class GroceryListStore {
     /// Fetches all grocery items for the user, ordered by `sortOrder` ascending.
     /// Called by `SearchView` on first appear. Non-fatal on network error.
     func fetchItems(userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         isLoading = true
         defer { isLoading = false }
 
@@ -82,8 +89,10 @@ final class GroceryListStore {
         // Authenticated path: Supabase.
         do {
             let fetched = try await remote.fetchItems(userId)
+            guard canApplyUserOwnedState(for: userId) else { return }
             mergeFetchedItems(fetched)
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return }
             reportFailure(error, action: .fetch, surfaceToUser: false)
         }
     }
@@ -96,6 +105,7 @@ final class GroceryListStore {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .ignored }
         guard !isAdding else { return .ignored }
+        guard canApplyUserOwnedState(for: userId) else { return .ignored }
 
         let nextOrder = (items.map(\.sortOrder).max() ?? -1) + 1
         let now       = Date()
@@ -122,6 +132,9 @@ final class GroceryListStore {
         // and append the confirmed row.
         do {
             let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+            guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                return .ignored
+            }
             let item = GroceryItem(
                 id:        UUID(),
                 userId:    validUserId,
@@ -131,10 +144,12 @@ final class GroceryListStore {
                 createdAt: now
             )
             let saved = try await remote.addItem(item)
+            guard canApplyUserOwnedState(for: validUserId) else { return .ignored }
             items.append(saved)
             actionErrorMessage = nil
             return .succeeded
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             return .failed(reportFailure(error, action: .add))
         }
     }
@@ -144,6 +159,7 @@ final class GroceryListStore {
     /// Flips the `isChecked` state of an item.
     /// Updates in memory immediately (optimistic) and reverts on Supabase failure.
     func toggleItem(_ item: GroceryItem, userId: UUID) async -> GroceryListActionResult {
+        guard canApplyUserOwnedState(for: userId) else { return .ignored }
         guard !busyItemIDs.contains(item.id),
               let idx = items.firstIndex(where: { $0.id == item.id })
         else {
@@ -163,11 +179,18 @@ final class GroceryListStore {
 
         // Authenticated path: validate the session, then partial update.
         do {
-            _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+            let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
+            if let validUserId {
+                guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                    return .ignored
+                }
+            }
             try await remote.updateChecked(item.id, newChecked)
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             actionErrorMessage = nil
             return .succeeded
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             // Revert optimistic toggle on failure.
             if let revertIdx = items.firstIndex(where: { $0.id == item.id }) {
                 items[revertIdx].isChecked = !newChecked
@@ -180,6 +203,7 @@ final class GroceryListStore {
 
     /// Removes a single item after Supabase confirms the delete.
     func deleteItem(_ item: GroceryItem, userId: UUID) async -> GroceryListActionResult {
+        guard canApplyUserOwnedState(for: userId) else { return .ignored }
         guard !busyItemIDs.contains(item.id),
               items.contains(where: { $0.id == item.id })
         else {
@@ -200,13 +224,20 @@ final class GroceryListStore {
         // Authenticated path: validate the session, then Supabase delete.
         // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
         do {
-            _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+            let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
+            if let validUserId {
+                guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                    return .ignored
+                }
+            }
             try await remote.deleteItem(item.id)
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             deletedItemIDs.insert(item.id)
             items.removeAll { $0.id == item.id }
             actionErrorMessage = nil
             return .succeeded
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             return .failed(reportFailure(error, action: .delete))
         }
     }
@@ -215,6 +246,7 @@ final class GroceryListStore {
 
     /// Removes all checked items after Supabase confirms the bulk delete.
     func clearChecked(userId: UUID) async -> GroceryListActionResult {
+        guard canApplyUserOwnedState(for: userId) else { return .ignored }
         let checkedIDs = Set(items.filter(\.isChecked).map(\.id))
         guard !checkedIDs.isEmpty, !isClearingChecked else { return .ignored }
         isClearingChecked = true
@@ -237,12 +269,17 @@ final class GroceryListStore {
         // rows for this user.
         do {
             let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+            guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                return .ignored
+            }
             try await remote.deleteChecked(validUserId)
+            guard canApplyUserOwnedState(for: validUserId) else { return .ignored }
             deletedItemIDs.formUnion(checkedIDs)
             items.removeAll { checkedIDs.contains($0.id) }
             actionErrorMessage = nil
             return .succeeded
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return .ignored }
             return .failed(reportFailure(error, action: .clearChecked))
         }
     }

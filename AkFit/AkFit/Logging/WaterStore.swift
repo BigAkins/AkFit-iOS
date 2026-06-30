@@ -32,6 +32,12 @@ final class WaterStore {
     private let guestStore: GuestDataStore?
     private let authManager: AuthManager?
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `GuestDataStore` and
@@ -63,6 +69,7 @@ final class WaterStore {
 
     /// Fetches water entries for the given calendar day (device-local).
     func refreshDay(userId: UUID, date: Date = Date()) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         let cal = Calendar.current
         let day = cal.startOfDay(for: date)
         let end = cal.date(byAdding: .day, value: 1, to: day)!
@@ -94,9 +101,11 @@ final class WaterStore {
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             dayEntries = entries
             dayEntriesDate = day
         } catch {
+            guard canApplyUserOwnedState(for: userId) else { return }
             refreshFailed = true
         }
     }
@@ -114,6 +123,9 @@ final class WaterStore {
 
     /// Adds a water intake event in milliliters.
     func add(amountMl: Int, for userId: UUID, date: Date = Date()) async throws {
+        guard canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         guard amountMl > 0 && amountMl <= 5000 else {
             throw WaterStoreError.invalidAmount
         }
@@ -135,6 +147,9 @@ final class WaterStore {
         }
 
         let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+        guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         let payload = WaterEntryInsert(
             userId: validUserId,
             amountMl: amountMl,
@@ -147,6 +162,7 @@ final class WaterStore {
             .single()
             .execute()
             .value
+        guard canApplyUserOwnedState(for: validUserId) else { return }
         updateInMemory(with: saved)
     }
 
@@ -159,12 +175,17 @@ final class WaterStore {
             return
         }
 
-        _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+        let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
         try await SupabaseClientProvider.shared
             .from("water_entries")
             .delete()
             .eq("id", value: entryId.uuidString)
             .execute()
+        if let validUserId {
+            guard canApplyUserOwnedState(for: validUserId) else { return }
+        } else {
+            guard !Task.isCancelled else { return }
+        }
         dayEntries.removeAll { $0.id == entryId }
     }
 

@@ -35,6 +35,12 @@ final class BodyweightStore {
 
     private var isGuest: Bool { guestStore?.isActive == true }
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `GuestDataStore` and
@@ -67,6 +73,7 @@ final class BodyweightStore {
     /// (today + the preceding `days - 1` days, device-local time).
     /// Replaces `weekLogs` on success.
     func refreshWeek(userId: UUID, days: Int = 7) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         // Guest path: filter from in-memory guest store.
         if let gs = guestStore, gs.isActive {
             let rangeStart = rangeStartDate(days: days)
@@ -86,6 +93,7 @@ final class BodyweightStore {
                 .order("logged_at", ascending: true)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             weekLogs = logs
         } catch {
             // Non-fatal: weekLogs stays empty or stale.
@@ -99,6 +107,9 @@ final class BodyweightStore {
     /// On success, appends the confirmed row to `weekLogs` and re-sorts by
     /// `logged_at` ascending so the chart always sees data in order.
     func log(weightKg: Double, for userId: UUID) async throws {
+        guard canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         let now = Date()
 
         // Guest path: create locally and persist to GuestDataStore.
@@ -119,6 +130,9 @@ final class BodyweightStore {
         // Authenticated path: validate the session (refreshing once if needed)
         // before issuing the write, then persist to Supabase.
         let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+        guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         let payload = BodyweightLogInsert(
             userId:   validUserId,
             weightKg: weightKg,
@@ -131,6 +145,7 @@ final class BodyweightStore {
             .single()
             .execute()
             .value
+        guard canApplyUserOwnedState(for: validUserId) else { return }
         weekLogs.append(saved)
         weekLogs.sort { $0.loggedAt < $1.loggedAt }
     }
@@ -148,12 +163,17 @@ final class BodyweightStore {
 
         // Authenticated path: validate the session before issuing the delete.
         // RLS scopes the delete to the owner via `using(auth.uid() = user_id)`.
-        _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+        let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
         try await SupabaseClientProvider.shared
             .from("bodyweight_logs")
             .delete()
             .eq("id", value: logId.uuidString)
             .execute()
+        if let validUserId {
+            guard canApplyUserOwnedState(for: validUserId) else { return }
+        } else {
+            guard !Task.isCancelled else { return }
+        }
         weekLogs.removeAll { $0.id == logId }
     }
 

@@ -30,6 +30,12 @@ final class FavoriteFoodStore {
 
     private let authManager: AuthManager?
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `AuthManager` from `AkFitApp`
@@ -64,6 +70,7 @@ final class FavoriteFoodStore {
     /// Called once on `SearchView` first appear via `.task`, concurrently with
     /// `FoodLogStore.refreshRecents`.
     func refresh(userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         do {
             let rows: [FavoriteFood] = try await SupabaseClientProvider.shared
                 .from("favorite_foods")
@@ -72,6 +79,7 @@ final class FavoriteFoodStore {
                 .order("created_at", ascending: false)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             favorites = rows
         } catch {
             // Non-fatal: favorites stays empty or stale.
@@ -92,6 +100,9 @@ final class FavoriteFoodStore {
     /// the star button responds instantly. Throws on Supabase errors so
     /// the caller can surface feedback if desired.
     func toggle(food: FoodItem, for userId: UUID) async throws {
+        guard canApplyUserOwnedState(for: userId) else {
+            throw AuthError.sessionMissing
+        }
         if let existing = favorites.first(where: {
             $0.foodName == food.name && $0.servingLabel == food.servingSize
         }) {
@@ -99,7 +110,12 @@ final class FavoriteFoodStore {
             favorites.removeAll { $0.id == existing.id }
             do {
                 // Validate the session before the delete; RLS scopes it to the owner.
-                _ = try await authManager?.requireAuthenticatedUserIDForWrite()
+                let validUserId = try await authManager?.requireAuthenticatedUserIDForWrite()
+                if let validUserId {
+                    guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                        throw AuthError.sessionMissing
+                    }
+                }
                 try await SupabaseClientProvider.shared
                     .from("favorite_foods")
                     .delete()
@@ -107,7 +123,9 @@ final class FavoriteFoodStore {
                     .execute()
             } catch {
                 // Revert optimistic remove on failure
-                favorites.insert(existing, at: 0)
+                if canApplyUserOwnedState(for: userId) {
+                    favorites.insert(existing, at: 0)
+                }
                 throw error
             }
         } else {
@@ -129,6 +147,9 @@ final class FavoriteFoodStore {
             do {
                 // Validate the session (refreshing once if needed) before the insert.
                 let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+                guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                    throw AuthError.sessionMissing
+                }
                 let payload = FavoriteFoodInsert(
                     userId:          validUserId,
                     foodName:        food.name,
@@ -147,13 +168,16 @@ final class FavoriteFoodStore {
                     .single()
                     .execute()
                     .value
+                guard canApplyUserOwnedState(for: validUserId) else { return }
                 // Replace placeholder with the server-confirmed row (gets real id + created_at)
                 if let idx = favorites.firstIndex(where: { $0.id == placeholder.id }) {
                     favorites[idx] = saved
                 }
             } catch {
                 // Revert optimistic add on failure
-                favorites.removeAll { $0.id == placeholder.id }
+                if canApplyUserOwnedState(for: userId) {
+                    favorites.removeAll { $0.id == placeholder.id }
+                }
                 throw error
             }
         }

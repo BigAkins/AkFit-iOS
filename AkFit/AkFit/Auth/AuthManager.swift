@@ -349,7 +349,14 @@ final class AuthManager {
 
     func retryFetchUserData() async {
         guard let session else { return }
-        let result = await fetchUserData(userId: session.user.id)
+        let userId = session.user.id
+        let result = await fetchUserData(userId: userId)
+        guard !Task.isCancelled,
+              userState == .authenticated,
+              self.session?.user.id == userId
+        else {
+            return
+        }
         self._serverProfile  = result.profile
         self._serverGoal     = result.goal
         self.dataFetchFailed = result.fetchFailed

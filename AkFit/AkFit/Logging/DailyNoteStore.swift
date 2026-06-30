@@ -30,6 +30,12 @@ final class DailyNoteStore {
     private let authManager: AuthManager?
     private var isGuest: Bool { guestStore?.isActive == true }
 
+    private func canApplyUserOwnedState(for userId: UUID) -> Bool {
+        guard !Task.isCancelled else { return false }
+        guard let authManager else { return true }
+        return authManager.currentUserId == userId
+    }
+
     // MARK: - Init
 
     /// Production initializer. Pass the shared `GuestDataStore` and
@@ -49,6 +55,7 @@ final class DailyNoteStore {
     /// Fetches today's note content. Called by `DashboardView` on first appear.
     /// Non-fatal on network error — `todayContent` stays empty.
     func fetchToday(userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         let key = Self.todayKey
 
         // Guest path: direct dictionary lookup.
@@ -70,6 +77,7 @@ final class DailyNoteStore {
                 .limit(1)
                 .execute()
                 .value
+            guard canApplyUserOwnedState(for: userId) else { return }
             todayContent = rows.first?.content ?? ""
         } catch {
             // Non-fatal: content stays at default empty string.
@@ -83,6 +91,7 @@ final class DailyNoteStore {
     /// Called when the user taps "Done" in `NoteEditorSheet`. Uses upsert on
     /// the `(user_id, note_date)` unique constraint — no prior fetch needed.
     func save(content: String, userId: UUID) async {
+        guard canApplyUserOwnedState(for: userId) else { return }
         todayContent = content
         let key = Self.todayKey
 
@@ -97,6 +106,7 @@ final class DailyNoteStore {
         defer { isSaving = false }
         do {
             let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
+            guard validUserId == userId, canApplyUserOwnedState(for: userId) else { return }
             let payload = DailyNoteUpsert(
                 userId:    validUserId,
                 noteDate:  key,
