@@ -45,6 +45,36 @@ struct FoodLog: Identifiable, Codable, Sendable {
     }
 }
 
+// MARK: - Custom Decodable
+
+extension FoodLog {
+    /// Guest-cached logs may predate the `meal_slot` field. Defaulting those
+    /// rows to `.snack` mirrors the database migration default and prevents one
+    /// legacy row from invalidating the whole persisted guest array.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id           = try c.decode(UUID.self,   forKey: .id)
+        userId       = try c.decode(UUID.self,   forKey: .userId)
+        foodName     = try c.decode(String.self, forKey: .foodName)
+        servingLabel = try c.decode(String.self, forKey: .servingLabel)
+        quantity     = try c.decode(Double.self, forKey: .quantity)
+        calories     = try c.decode(Int.self,    forKey: .calories)
+        proteinG     = try c.decode(Double.self, forKey: .proteinG)
+        carbsG       = try c.decode(Double.self, forKey: .carbsG)
+        fatG         = try c.decode(Double.self, forKey: .fatG)
+        loggedAt     = try c.decode(Date.self,   forKey: .loggedAt)
+        createdAt    = try c.decode(Date.self,   forKey: .createdAt)
+
+        let rawMealSlot = (try? c.decodeIfPresent(String.self, forKey: .mealSlot)) ?? nil
+        if let rawMealSlot,
+           let decodedMealSlot = MealSlot(rawValue: rawMealSlot) {
+            mealSlot = decodedMealSlot
+        } else {
+            mealSlot = .snack
+        }
+    }
+}
+
 // MARK: - Re-log bridge
 
 extension FoodLog {

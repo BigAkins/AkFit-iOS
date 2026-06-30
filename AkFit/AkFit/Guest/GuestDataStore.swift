@@ -1,4 +1,10 @@
 import Foundation
+import OSLog
+
+private let guestDataLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "AkFit",
+    category: "GuestDataStore"
+)
 
 // MARK: - App user state
 
@@ -57,7 +63,7 @@ final class GuestDataStore {
         static let groceryItems   = "guest.groceryItems"
     }
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
 
     // MARK: - JSON codec
     //
@@ -120,8 +126,8 @@ final class GuestDataStore {
 
     // MARK: - Init
 
-    init() {
-        let defaults = UserDefaults.standard
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
 
         // Load or create the stable guest UUID.
         if let stored = defaults.string(forKey: Keys.guestId),
@@ -135,17 +141,18 @@ final class GuestDataStore {
 
         // Load runtime flags and user data.
         self.isActive = defaults.bool(forKey: Keys.isActive)
-        self.goal     = Self.load(UserGoal.self,   key: Keys.goal)
-        self.profile  = Self.load(UserProfile.self, key: Keys.profile)
+        self.goal     = Self.load(UserGoal.self,    key: Keys.goal,    defaults: defaults)
+        self.profile  = Self.load(UserProfile.self, key: Keys.profile, defaults: defaults)
 
-        // Load log arrays (default to empty if nothing persisted yet).
-        self.allFoodLogs       = Self.load([FoodLog].self,         key: Keys.foodLogs)       ?? []
-        self.allBodyweightLogs = Self.load([BodyweightLog].self,   key: Keys.bodyweightLogs) ?? []
-        self.allWaterEntries   = Self.load([WaterEntry].self,      key: Keys.waterEntries)   ?? []
+        // Load log arrays lossily so one legacy/corrupt row cannot wipe the
+        // whole guest history on the next write.
+        self.allFoodLogs       = Self.loadLossyArray(FoodLog.self,       key: Keys.foodLogs,       defaults: defaults)
+        self.allBodyweightLogs = Self.loadLossyArray(BodyweightLog.self, key: Keys.bodyweightLogs, defaults: defaults)
+        self.allWaterEntries   = Self.loadLossyArray(WaterEntry.self,    key: Keys.waterEntries,   defaults: defaults)
 
         // Load planning data (default to empty).
-        self.dailyNotes     = Self.load([String: String].self, key: Keys.dailyNotes)   ?? [:]
-        self.allGroceryItems = Self.load([GroceryItem].self,   key: Keys.groceryItems) ?? []
+        self.dailyNotes      = Self.loadStringDictionary(key: Keys.dailyNotes, defaults: defaults)
+        self.allGroceryItems = Self.loadLossyArray(GroceryItem.self, key: Keys.groceryItems, defaults: defaults)
     }
 
     // MARK: - Activation
@@ -274,15 +281,163 @@ final class GuestDataStore {
     // MARK: - Private helpers
 
     private func persist<T: Encodable>(_ value: T?, key: String) {
-        guard let value, let data = try? Self.encoder.encode(value) else {
+        guard let value else {
             defaults.removeObject(forKey: key)
             return
         }
-        defaults.set(data, forKey: key)
+
+        do {
+            let data = try Self.encoder.encode(value)
+            defaults.set(data, forKey: key)
+        } catch {
+            Self.reportDecodeIssue(
+                error,
+                key: key,
+                typeName: String(describing: T.self),
+                reason: "encode_failed",
+                droppedCount: 0,
+                totalCount: 0
+            )
+        }
     }
 
-    private static func load<T: Decodable>(_ type: T.Type, key: String) -> T? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? decoder.decode(type, from: data)
+    private static func load<T: Decodable>(
+        _ type: T.Type,
+        key: String,
+        defaults: UserDefaults
+    ) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        do {
+            return try decoder.decode(type, from: data)
+        } catch {
+            reportDecodeIssue(
+                error,
+                key: key,
+                typeName: String(describing: T.self),
+                reason: "decode_failed",
+                droppedCount: 0,
+                totalCount: 1
+            )
+            return nil
+        }
     }
+
+    private static func loadLossyArray<T: Decodable>(
+        _ elementType: T.Type,
+        key: String,
+        defaults: UserDefaults
+    ) -> [T] {
+        guard let data = defaults.data(forKey: key) else { return [] }
+
+        do {
+            let decoded = try decoder.decode([LossyElement<T>].self, from: data)
+            let values = decoded.compactMap(\.value)
+            let dropped = decoded.count - values.count
+            if dropped > 0 {
+                reportDecodeIssue(
+                    GuestDataDecodeIssue.partialCollection,
+                    key: key,
+                    typeName: "[\(String(describing: elementType))]",
+                    reason: "partial_collection",
+                    droppedCount: dropped,
+                    totalCount: decoded.count
+                )
+            }
+            return values
+        } catch {
+            reportDecodeIssue(
+                error,
+                key: key,
+                typeName: "[\(String(describing: elementType))]",
+                reason: "collection_decode_failed",
+                droppedCount: 0,
+                totalCount: 0
+            )
+            return []
+        }
+    }
+
+    private static func loadStringDictionary(
+        key: String,
+        defaults: UserDefaults
+    ) -> [String: String] {
+        guard let data = defaults.data(forKey: key) else { return [:] }
+
+        do {
+            return try decoder.decode([String: String].self, from: data)
+        } catch {
+            do {
+                let object = try JSONSerialization.jsonObject(with: data)
+                guard let rawDictionary = object as? [String: Any] else { throw error }
+
+                var recovered: [String: String] = [:]
+                var dropped = 0
+                for (rawKey, rawValue) in rawDictionary {
+                    if let value = rawValue as? String {
+                        recovered[rawKey] = value
+                    } else {
+                        dropped += 1
+                    }
+                }
+
+                if dropped > 0 {
+                    reportDecodeIssue(
+                        GuestDataDecodeIssue.partialCollection,
+                        key: key,
+                        typeName: "[String: String]",
+                        reason: "partial_dictionary",
+                        droppedCount: dropped,
+                        totalCount: rawDictionary.count
+                    )
+                }
+                return recovered
+            } catch {
+                reportDecodeIssue(
+                    error,
+                    key: key,
+                    typeName: "[String: String]",
+                    reason: "dictionary_decode_failed",
+                    droppedCount: 0,
+                    totalCount: 0
+                )
+                return [:]
+            }
+        }
+    }
+
+    private static func reportDecodeIssue(
+        _ error: Error,
+        key: String,
+        typeName: String,
+        reason: String,
+        droppedCount: Int,
+        totalCount: Int
+    ) {
+        guestDataLogger.error(
+            "guest persistence issue key=\(key, privacy: .public) type=\(typeName, privacy: .public) reason=\(reason, privacy: .public) dropped=\(droppedCount, privacy: .public) total=\(totalCount, privacy: .public)"
+        )
+        SentryMonitoring.captureNonFatal(
+            error,
+            operation: "guest_persistence_decode",
+            tags: [
+                "key": key,
+                "type": typeName,
+                "reason": reason,
+                "dropped_count": String(droppedCount),
+                "total_count": String(totalCount),
+            ]
+        )
+    }
+}
+
+private struct LossyElement<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
+}
+
+private enum GuestDataDecodeIssue: Error {
+    case partialCollection
 }
