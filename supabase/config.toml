@@ -154,7 +154,20 @@ enabled = true
 # in emails.
 site_url = "http://127.0.0.1:3000"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# akfit://auth-callback is the iOS deep link for BOTH Google OAuth
+# (AuthManager.googleRedirectURL — bare URL, matched by the exact entry) and
+# the password-reset email (PasswordRecoveryLink.redirectURL — carries
+# ?flow=password-recovery&state=..., so it needs the ** wildcard entry;
+# a bare exact entry does NOT match a redirect with a query string).
+# PRODUCTION NOTE: this allow-list is dashboard-managed for the hosted
+# project — Authentication → URL Configuration must contain BOTH entries
+# below (or at least the ** form) or recovery/OAuth redirects silently fall
+# back to site_url. Keep the two in sync.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "akfit://auth-callback",
+  "akfit://auth-callback**",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to the local API URL (http://127.0.0.1:<port>/auth/v1).
@@ -207,6 +220,12 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
+# Local-only convenience. PRODUCTION NOTE: the hosted project's auth settings
+# are dashboard-managed and NOT covered by the drift check — production should
+# keep email confirmations AND leaked-password protection enabled (see
+# migration 20260513000000_security_advisor_cleanup.sql). The client already
+# handles the confirmation-required signup path (AuthManager.signUp returns
+# session == nil).
 enable_confirmations = false
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
 secure_password_change = true

@@ -159,7 +159,24 @@ struct FoodDetailView: View {
                         return
                     }
                     guard let userId = authManager.currentUserId else { return }
-                    Task { try? await favStore.toggle(food: food, for: userId) }
+                    Task {
+                        do {
+                            try await favStore.toggle(food: food, for: userId)
+                        } catch {
+                            // The store reverts the optimistic star on failure,
+                            // which is the user-visible signal. Capture here so
+                            // the only otherwise-unobserved Supabase write path
+                            // is visible in Sentry.
+                            SentryMonitoring.captureNonFatal(
+                                error,
+                                operation: "favorite_toggle",
+                                tags: [
+                                    "classification": SaveErrorClassification.classification(of: error),
+                                    "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                                ]
+                            )
+                        }
+                    }
                 } label: {
                     Image(systemName: isFav ? "star.fill" : "star")
                         .foregroundStyle(isFav ? Color.yellow : Color.secondary)

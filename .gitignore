@@ -51,9 +51,11 @@ graphify-out/
 LocalConfig.swift
 SupabaseConfig.local.swift
 
-# Xcode archives / local build output
+# Xcode archives / result bundles / local build output
 archive/
 build/
+*.xcarchive
+*.xcresult
 
 # Fastlane outputs, if you add Fastlane later
 fastlane/report.xml

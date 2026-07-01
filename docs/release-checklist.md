@@ -1,7 +1,8 @@
 # AkFit Release Checklist
 
 Operational sequence for shipping an App Store build. Principles live in
-`CLAUDE.md` (App Store / release rules); this is the step-by-step list.
+`CLAUDE.md` (App Store / release rules — gitignored, local-only; not present
+in a fresh clone); this is the step-by-step list.
 
 ## 1. Pre-flight (before bumping anything)
 

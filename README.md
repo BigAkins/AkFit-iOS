@@ -103,6 +103,10 @@ The UI references for this project live in:
 docs/ui-reference/
 ```
 
+> **Note:** `docs/ui-reference/` and `CLAUDE.md` are intentionally gitignored
+> (local-only working material) — they are not present in a fresh clone of
+> this repository.
+
 Important files include:
 
 ```text

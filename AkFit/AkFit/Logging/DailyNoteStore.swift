@@ -1,5 +1,11 @@
 import Foundation
+import OSLog
 import Supabase
+
+private let dailyNoteLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "AkFit",
+    category: "DailyNoteStore"
+)
 
 /// Owns today's daily note — one free-text note per calendar day.
 ///
@@ -86,19 +92,25 @@ final class DailyNoteStore {
 
     // MARK: - Save
 
-    /// Persists `content` for today's date and updates `todayContent` in memory.
+    /// Persists `content` for today's date, then updates `todayContent` in memory.
     ///
     /// Called when the user taps "Done" in `NoteEditorSheet`. Uses upsert on
     /// the `(user_id, note_date)` unique constraint — no prior fetch needed.
-    func save(content: String, userId: UUID) async {
-        guard canApplyUserOwnedState(for: userId) else { return }
-        todayContent = content
+    ///
+    /// Returns `false` when the note was NOT persisted (network/session
+    /// failure or identity change mid-save). `todayContent` is only mutated
+    /// after the write is decided, so a failed save never shows the user
+    /// content that will vanish on next launch — the editor keeps the text
+    /// and surfaces a retry alert instead.
+    func save(content: String, userId: UUID) async -> Bool {
+        guard canApplyUserOwnedState(for: userId) else { return false }
         let key = Self.todayKey
 
         // Guest path: write to UserDefaults dictionary.
         if let gs = guestStore, gs.isActive {
             gs.saveDailyNote(content, for: key)
-            return
+            todayContent = content
+            return true
         }
 
         // Authenticated path: validate the session, then upsert to Supabase.
@@ -106,7 +118,10 @@ final class DailyNoteStore {
         defer { isSaving = false }
         do {
             let validUserId = (try await authManager?.requireAuthenticatedUserIDForWrite()) ?? userId
-            guard validUserId == userId, canApplyUserOwnedState(for: userId) else { return }
+            guard validUserId == userId, canApplyUserOwnedState(for: userId) else {
+                dailyNoteLogger.error("daily note save aborted reason=identity_changed")
+                return false
+            }
             let payload = DailyNoteUpsert(
                 userId:    validUserId,
                 noteDate:  key,
@@ -117,14 +132,34 @@ final class DailyNoteStore {
                 .from("daily_notes")
                 .upsert(payload, onConflict: "user_id,note_date")
                 .execute()
+            guard canApplyUserOwnedState(for: userId) else { return true }
+            todayContent = content
+            return true
         } catch {
-            // Non-fatal: the in-memory update already happened. The next
-            // successful save will persist it.
+            let classification = SaveErrorClassification.classification(of: error)
+            let postgrestCode = SaveErrorClassification.postgrestCode(of: error)
+            let authCode = SaveErrorClassification.authCode(of: error)
+            dailyNoteLogger.error(
+                "daily note save failed classification=\(classification, privacy: .public) postgrest_code=\(postgrestCode, privacy: .public) auth_code=\(authCode, privacy: .public)"
+            )
+            SentryMonitoring.captureNonFatal(
+                error,
+                operation: "daily_note_save",
+                tags: [
+                    "classification": classification,
+                    "postgrest_code": postgrestCode,
+                    "auth_code": authCode,
+                ]
+            )
+            return false
         }
     }
 
-    // MARK: - Reset (called when exiting guest mode)
+    // MARK: - Reset
 
+    /// Clears all user-owned state. Called ONLY by
+    /// `RootView.resetUserOwnedStores()` (AkFitApp.swift) on identity
+    /// transitions — never from call-site-local reset lists.
     func reset() {
         todayContent = ""
         isSaving     = false

@@ -15,8 +15,8 @@ import Supabase
 /// ## Toggle pattern
 /// `toggle(food:for:)` checks in-memory state first, so the star button
 /// responds instantly. The Supabase write happens in the background; if it
-/// throws, the caller can surface an error (the optimistic update is NOT
-/// reverted — next `refresh` call will re-sync).
+/// throws, the optimistic update IS reverted (the star visibly un-fills) and
+/// the error is rethrown so the caller can also report it.
 @Observable
 final class FavoriteFoodStore {
 

@@ -67,6 +67,9 @@ struct SearchView: View {
     /// `showDeleteError` pattern — previously the gesture failed silently and
     /// users believed the food was logged.
     @State private var showQuickLogError = false
+    /// Shown when the post-log banner's Undo delete fails — the entry is
+    /// still logged, so the user must know the undo did not happen.
+    @State private var showUndoError = false
     /// Food names and brand names from the database, used as the type-ahead
     /// suggestion pool. Fetched once on first appear. Guaranteed searchable.
     @State private var typeAheadTerms: [String] = []
@@ -139,6 +142,11 @@ struct SearchView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text("Please check your connection and try again.")
+            }
+            .alert("Couldn't undo", isPresented: $showUndoError) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text("The entry is still logged. Please check your connection and try again.")
             }
             .alert("Couldn't update grocery list", isPresented: $showGroceryActionError) {
                 Button("OK", role: .cancel) {}
@@ -734,7 +742,21 @@ struct SearchView: View {
         withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
             bannerEntry = nil
         }
-        Task { try? await logStore.delete(logId: entry.id) }
+        Task {
+            do {
+                try await logStore.delete(logId: entry.id)
+            } catch {
+                SentryMonitoring.captureNonFatal(
+                    error,
+                    operation: "quick_log_undo",
+                    tags: [
+                        "classification": SaveErrorClassification.classification(of: error),
+                        "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                    ]
+                )
+                showUndoError = true
+            }
+        }
     }
 
     // MARK: - Type-ahead suggestions
