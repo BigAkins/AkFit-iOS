@@ -752,6 +752,7 @@ struct SearchView: View {
                     tags: [
                         "classification": SaveErrorClassification.classification(of: error),
                         "postgrest_code": SaveErrorClassification.postgrestCode(of: error),
+                        "auth_code": SaveErrorClassification.authCode(of: error),
                     ]
                 )
                 showUndoError = true

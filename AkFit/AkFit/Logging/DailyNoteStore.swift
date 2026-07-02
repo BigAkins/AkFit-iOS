@@ -98,10 +98,15 @@ final class DailyNoteStore {
     /// the `(user_id, note_date)` unique constraint — no prior fetch needed.
     ///
     /// Returns `false` when the note was NOT persisted (network/session
-    /// failure or identity change mid-save). `todayContent` is only mutated
-    /// after the write is decided, so a failed save never shows the user
-    /// content that will vanish on next launch — the editor keeps the text
-    /// and surfaces a retry alert instead.
+    /// failure, or the identity changed before the write was issued).
+    /// `todayContent` is only mutated after the write is decided, so a
+    /// failed save never shows the user content that will vanish on next
+    /// launch — the editor keeps the text and surfaces a retry alert instead.
+    ///
+    /// If the identity changes AFTER a successful upsert, the write has
+    /// persisted for the original account, so this still returns `true`;
+    /// only the local `todayContent` mutation is skipped (RootView resets
+    /// this store on identity transitions).
     func save(content: String, userId: UUID) async -> Bool {
         guard canApplyUserOwnedState(for: userId) else { return false }
         let key = Self.todayKey
