@@ -88,10 +88,11 @@ final class FoodLogStore {
         lastLoggedEntry = nil
     }
 
-    // MARK: - Reset (called when exiting guest mode)
+    // MARK: - Reset
 
-    /// Clears all in-memory log state. Called by `SettingsView` when the user
-    /// exits guest mode so stale guest data doesn't persist in memory.
+    /// Clears all in-memory log state. Called ONLY by
+    /// `RootView.resetUserOwnedStores()` (AkFitApp.swift) on identity
+    /// transitions — never from call-site-local reset lists.
     func reset() {
         todayLogs       = []
         recentFoods     = []

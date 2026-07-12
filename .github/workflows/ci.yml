@@ -2,6 +2,10 @@ name: CI
 
 on:
   pull_request:
+  # Direct pushes to main (and PR merges) run the same gate — without this,
+  # anything pushed straight to main would bypass all three test suites.
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:

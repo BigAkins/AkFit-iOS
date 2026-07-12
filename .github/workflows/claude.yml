@@ -32,7 +32,9 @@ jobs:
       actions: read # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        # CLAUDE_CODE_OAUTH_TOKEN is in scope in this job, so pin actions to
+        # SHAs (same pin as supabase-production-drift.yml).
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 1
 

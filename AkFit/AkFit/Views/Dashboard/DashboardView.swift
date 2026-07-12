@@ -1141,6 +1141,7 @@ private struct NoteEditorSheet: View {
 
     @State private var text: String = ""
     @State private var isSaving = false
+    @State private var showSaveError = false
     @FocusState private var isEditorFocused: Bool
 
     var body: some View {
@@ -1177,6 +1178,15 @@ private struct NoteEditorSheet: View {
             try? await Task.sleep(for: .milliseconds(400))
             isEditorFocused = true
         }
+        // Block swipe-to-dismiss while a save is in flight: the store no
+        // longer optimistically keeps unsaved text, so tearing down the sheet
+        // mid-save would destroy the typed note if the write then fails.
+        .interactiveDismissDisabled(isSaving)
+        .alert("Couldn't save note", isPresented: $showSaveError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Please check your connection and try again.")
+        }
     }
 
     private func save() {
@@ -1185,8 +1195,12 @@ private struct NoteEditorSheet: View {
         isSaving = true
         Task {
             defer { isSaving = false }
-            await noteStore.save(content: trimmed, userId: userId)
-            dismiss()
+            let saved = await noteStore.save(content: trimmed, userId: userId)
+            if saved {
+                dismiss()
+            } else {
+                showSaveError = true
+            }
         }
     }
 }

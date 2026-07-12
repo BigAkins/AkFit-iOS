@@ -302,8 +302,12 @@ final class GroceryListStore {
         busyItemIDs.contains(item.id)
     }
 
-    // MARK: - Reset (called when exiting guest mode)
+    // MARK: - Reset
 
+    /// Clears all user-owned state, including the merge-race bookkeeping
+    /// (busy/tombstone sets, write versions, confirmed-write cache). Called
+    /// ONLY by `RootView.resetUserOwnedStores()` (AkFitApp.swift) on identity
+    /// transitions — never from call-site-local reset lists.
     func reset() {
         items              = []
         isLoading          = false
